@@ -1,6 +1,6 @@
 {
   "name": "@opentoria/opencode-agent-mailbox",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Durable asynchronous questions and direct replies for native OpenCode 2 subagents",
   "scripts": {
     "prepare": "husky",
