@@ -8,3 +8,5 @@ coverage/
 !.env.example
 .e2e/
 release-artifacts/
+
+*Zone.Identifier
