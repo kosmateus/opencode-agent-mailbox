@@ -1,15 +1,36 @@
 name: Release
+
 on:
   push:
     branches: [main, master]
   workflow_dispatch:
+
 permissions:
   contents: read
+
 concurrency:
   group: npm-release
   cancel-in-progress: false
+
 jobs:
+  verify:
+    if: github.ref_name == github.event.repository.default_branch && (github.ref_name == 'main' || github.ref_name == 'master')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.22.1'
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run check
+      - run: npm run test:e2e
+
   release:
+    needs: verify
     if: github.ref_name == github.event.repository.default_branch && (github.ref_name == 'main' || github.ref_name == 'master')
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -28,8 +49,6 @@ jobs:
           node-version: '24.22.1'
           package-manager-cache: false
       - run: npm ci
-      - run: npm run check
-      - run: npm run test:e2e
       - name: Publish with npm Trusted Publishing
         run: npm run release
         env:
