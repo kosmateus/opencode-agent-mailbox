@@ -1,1 +1,1 @@
-npm run check:quality
+npm run check:quality:staged

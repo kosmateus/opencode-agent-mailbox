@@ -8,13 +8,11 @@ Independent community plugin, not built by or affiliated with the OpenCode team.
 
 Targets **OpenCode 2.2.5** and `@opencode/plugin@2.2.5`. OpenCode 1 is not supported. Later 2.x versions require compatibility testing. Development and CI use Node 24.22.1 and npm 11+. The installed plugin runs inside the OpenCode server, using local SQLite via `@libsql/client`. Linux x64 is covered by the real-host E2E test; other OS/architectures are not certified by that test.
 
-After the package has been published under your chosen name:
+Install the published package:
 
 ```sh
-opencode plugin add opencode-agent-mailbox
+opencode plugin add @opentoria/opencode-agent-mailbox
 ```
-
-The repository's default npm name is `opencode-agent-mailbox`; replace it in this command if the owner published a scoped or renamed package. This source distribution does not itself publish an npm package.
 
 A local installation also works after `npm ci && npm run build`:
 
@@ -33,7 +31,7 @@ OpenCode defaults to a shallow subagent depth. Increase its own `experimental.su
 {
   "plugins": [
     {
-      "package": "opencode-agent-mailbox",
+      "package": "@opentoria/opencode-agent-mailbox",
       "options": {
         "timeoutMs": 300000,
         "pollMs": 250,

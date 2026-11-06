@@ -9,6 +9,7 @@
     "lint": "eslint src tests scripts",
     "check:madge": "madge --circular --extensions ts --ts-config tsconfig.json src",
     "check:quality": "npm run format:check && npm run lint && npm run check:madge",
+    "check:quality:staged": "lint-staged && npm run check:madge",
     "test": "vitest run",
     "test:e2e": "node scripts/e2e.mjs",
     "check": "npm run typecheck && npm run lint && npm run format:check && npm test && npm run build && npm run pack:check",
@@ -39,6 +40,7 @@
     "conventional-changelog-conventionalcommits": "9.3.1",
     "eslint": "10.14.0",
     "husky": "9.1.7",
+    "lint-staged": "17.6.0",
     "madge": "5.0.1",
     "prettier": "3.9.10",
     "semantic-release": "25.0.9",
@@ -76,5 +78,12 @@
   "homepage": "https://github.com/kosmateus/opencode-agent-mailbox#readme",
   "bugs": {
     "url": "https://github.com/kosmateus/opencode-agent-mailbox/issues"
+  },
+  "lint-staged": {
+    "*.{js,mjs,cjs,ts,mts,cts,jsx,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md,yml,yaml}": "prettier --write"
   }
 }
