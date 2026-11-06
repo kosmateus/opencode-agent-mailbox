@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+*.tgz
+*.zip
+*.db*
+.env*
+!.env.example
+.e2e/
+release-artifacts/

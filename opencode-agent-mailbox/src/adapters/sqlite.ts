@@ -1,0 +1,95 @@
+import { createClient, type Client } from '@libsql/client';
+import { chmod, mkdir } from 'node:fs/promises';
+import { dirname } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { Request, MailboxError } from '../domain/model.js';
+import type { Repository } from '../ports/index.js';
+export class SqliteRepository implements Repository {
+  private tail: Promise<unknown> = Promise.resolve();
+  private constructor(
+    private readonly db: Client,
+    private readonly maxPending: number,
+  ) {}
+  static async open(path: string, maxPending = 1000): Promise<SqliteRepository> {
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    const db = createClient({ url: pathToFileURL(path).href });
+    try {
+      await db.execute('PRAGMA busy_timeout=0');
+      await db.execute('PRAGMA synchronous=FULL');
+      await retryBusy(() => db.execute('PRAGMA journal_mode=WAL'));
+      await retryBusy(() =>
+        db.execute(
+          'CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, active INTEGER NOT NULL, body TEXT NOT NULL)',
+        ),
+      );
+      await retryBusy(() => db.execute('CREATE INDEX IF NOT EXISTS requests_active ON requests(active)'));
+      await chmod(path, 0o600);
+      return new SqliteRepository(db, maxPending);
+    } catch (error) {
+      db.close();
+      throw error;
+    }
+  }
+  private decode(body: unknown): Request {
+    return Request.parse(JSON.parse(String(body)));
+  }
+  async get(id: string): Promise<Request | undefined> {
+    const row = (await this.db.execute({ sql: 'SELECT body FROM requests WHERE id=?', args: [id] })).rows[0];
+    return row ? this.decode(row.body) : undefined;
+  }
+  update<T>(
+    id: string,
+    change: (current: Request | undefined) => { request: Request; result: T },
+  ): Promise<T> {
+    const execute = async () => {
+      const tx = await this.db.transaction('write');
+      try {
+        const row = (await tx.execute({ sql: 'SELECT body FROM requests WHERE id=?', args: [id] })).rows[0];
+        const { request, result } = change(row ? this.decode(row.body) : undefined);
+        if (!row) {
+          const count = (await tx.execute('SELECT COUNT(*) AS n FROM requests WHERE active=1')).rows[0];
+          if (Number(count?.n) >= this.maxPending)
+            throw new MailboxError('CAPACITY', 'Pending request limit reached.');
+        }
+        Request.parse(request);
+        const active = request.state === 'pending' || request.outbox.some((d) => d.state === 'pending');
+        await tx.execute({
+          sql: 'INSERT INTO requests(id,active,body) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET active=excluded.active,body=excluded.body',
+          args: [id, active ? 1 : 0, JSON.stringify(request)],
+        });
+        await tx.commit();
+        return result;
+      } catch (error) {
+        await tx.rollback();
+        throw error;
+      } finally {
+        tx.close();
+      }
+    };
+    const job = this.tail.then(() => retryBusy(execute));
+    this.tail = job.catch(() => undefined);
+    return job;
+  }
+  async active(): Promise<Request[]> {
+    return (await this.db.execute('SELECT body FROM requests WHERE active=1')).rows.map((r) =>
+      this.decode(r.body),
+    );
+  }
+  close(): void {
+    this.db.close();
+  }
+}
+
+async function retryBusy<T>(run: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await run();
+    } catch (error) {
+      const busy = error instanceof Error && /SQLITE_BUSY|database is locked/.test(error.message);
+      if (!busy || attempt >= 12) throw error;
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(250, 10 * 2 ** attempt) + Math.random() * 20),
+      );
+    }
+  }
+}

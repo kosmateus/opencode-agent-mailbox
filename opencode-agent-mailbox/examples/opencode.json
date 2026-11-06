@@ -1,0 +1,9 @@
+{
+  "plugins": [
+    {
+      "package": "opencode-agent-mailbox",
+      "options": { "timeoutMs": 300000, "pollMs": 250, "maxPending": 1000, "toasts": true }
+    }
+  ],
+  "experimental": { "subagent_depth": 4 }
+}

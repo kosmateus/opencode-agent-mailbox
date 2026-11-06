@@ -1,0 +1,66 @@
+{
+  "name": "opencode-agent-mailbox",
+  "version": "0.0.0",
+  "description": "Durable asynchronous questions and direct replies for native OpenCode 2 subagents",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "lint": "eslint src tests scripts",
+    "test": "vitest run",
+    "test:e2e": "node scripts/e2e.mjs",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm test && npm run build && npm run pack:check",
+    "pack:check": "node scripts/check-pack.mjs",
+    "release": "semantic-release",
+    "release:dry": "semantic-release --dry-run",
+    "release:plan": "node scripts/release-plan.mjs",
+    "format": "prettier --write src tests scripts docs examples .github *.json *.js README.md",
+    "format:check": "prettier --check src tests scripts docs examples .github *.json *.js README.md"
+  },
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@libsql/client": "0.18.0",
+    "@opencode/plugin": "2.2.5",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@opencode/cli": "2.2.5",
+    "@opencode/client": "2.2.5",
+    "@semantic-release/commit-analyzer": "13.0.1",
+    "@semantic-release/exec": "7.1.0",
+    "@semantic-release/github": "12.0.10",
+    "@semantic-release/npm": "13.2.0",
+    "@semantic-release/release-notes-generator": "14.1.1",
+    "@types/node": "26.6.6",
+    "conventional-changelog-conventionalcommits": "10.4.1",
+    "eslint": "10.14.0",
+    "prettier": "3.9.10",
+    "semantic-release": "25.0.9",
+    "solid-js": "1.9.18",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.1",
+    "vitest": "5.1.0"
+  },
+  "engines": {
+    "node": ">=24.10.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./tui": {
+      "types": "./dist/tui.d.ts",
+      "import": "./dist/tui.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "docs/API.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}
