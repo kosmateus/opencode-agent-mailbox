@@ -50,11 +50,18 @@ describe('official OpenCode adapter contracts', () => {
     );
     expect(synthetic.mock.calls[0]?.[0].description).toContain('ses_D -> ses_A');
   });
-  it('uses a per-request wake override and never wakes for questions or notifications', async () => {
+  it('uses sender wake policy only for answers and wakes direct-child questions and notifications', async () => {
     const synthetic = vi.fn<Plugin.Context['session']['synthetic']>();
+    const get = vi.fn(async ({ sessionID }: { sessionID: string }) => ({
+      id: sessionID,
+      parentID: sessionID === 'ses_B' ? 'ses_A' : undefined,
+      projectID: 'p',
+      title: sessionID,
+      time: {},
+    }));
     const wakeOnReply = vi.fn().mockResolvedValue(false);
     const adapter = new OpenCodeSessions(
-      { session: { synthetic } as unknown as Plugin.Context['session'] },
+      { session: { synthetic, get } as unknown as Plugin.Context['session'] },
       'p',
       wakeOnReply,
     );
@@ -77,13 +84,13 @@ describe('official OpenCode adapter contracts', () => {
     });
 
     await adapter.admit(request, delivery('question'));
-    expect(synthetic.mock.calls[0]?.[0].resume).toBe(false);
+    expect(synthetic.mock.calls[0]?.[0].resume).toBe(true);
     expect(wakeOnReply).not.toHaveBeenCalled();
     await adapter.admit({ ...request, wakeOnReply: true }, delivery('answer'));
     expect(synthetic.mock.calls[1]?.[0].resume).toBe(true);
     expect(wakeOnReply).not.toHaveBeenCalled();
     await adapter.admit({ ...request, requiresReply: false }, delivery('notification'));
-    expect(synthetic.mock.calls[2]?.[0].resume).toBe(false);
+    expect(synthetic.mock.calls[2]?.[0].resume).toBe(true);
     expect(wakeOnReply).not.toHaveBeenCalled();
     await adapter.admit(request, { ...delivery('answer'), id: 'msg_answer_policy' });
     expect(synthetic.mock.calls[3]?.[0].resume).toBe(false);

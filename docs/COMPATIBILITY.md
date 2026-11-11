@@ -19,7 +19,7 @@ Primary sources:
 
 Source checkout examined: `0fdff425ff2ba3e7874321b43709d1e62f539337`. Released npm types, not speculative adapters or a legacy SDK, are the compilation authority.
 
-`session.synthetic` accepts a caller-supplied `id`, `delivery`, `resume`, text, description and metadata. Reusing an ID within the same session/type adopts the original admission. Steer delivery occurs at safe step boundaries, and `resume:false` does not schedule a new execution. The plugin uses `resume:false` for questions and notifications; answers use the request's wake policy or the user's session-tree/global default, so an idle original sender can resume without interrupting an active run.
+`session.synthetic` accepts a caller-supplied `id`, `delivery`, `resume`, text, description and metadata. Reusing an ID within the same session/type adopts the original admission. Steer delivery occurs at safe step boundaries, and `resume:false` does not schedule a new execution. The plugin uses `resume:true` for questions and notifications to a direct child or authorized peer subagent, such as a sibling or cousin; non-direct descendants and upward messages do not force a wake. Answers use the request's wake policy or the user's session-tree/global default, so an idle original sender can resume without interrupting an active run.
 
 The plugin session context exposes list/get/context/synthetic and hooks, but does not expose the complete HTTP inbox-management or active-execution APIs. This implementation does not fabricate such methods or bypass the SDK with private HTTP access. Status uses actual paginated list and context reads. Cancellation is a plugin state transition, not host transcript deletion.
 

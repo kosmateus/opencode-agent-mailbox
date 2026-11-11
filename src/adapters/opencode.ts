@@ -50,11 +50,37 @@ export class OpenCodeSessions implements Sessions {
   hasSeen(id: string): boolean {
     return this.seen.has(id);
   }
+  private async wakesSubagent(from: string, to: string): Promise<boolean> {
+    const recipient = await this.get(to);
+    if (!recipient.parentID) return false;
+    if (recipient.parentID === from) return true;
+    let sender = await this.get(from);
+    if (!sender.parentID) return false;
+    const seen = new Set([sender.id]);
+    while (sender.parentID) {
+      if (sender.parentID === recipient.id) return false;
+      sender = await this.get(sender.parentID);
+      if (seen.has(sender.id)) return false;
+      seen.add(sender.id);
+    }
+    let target = recipient;
+    const targetAncestors = new Set([target.id]);
+    while (target.parentID) {
+      if (target.parentID === from) return false;
+      target = await this.get(target.parentID);
+      if (targetAncestors.has(target.id)) return false;
+      targetAncestors.add(target.id);
+    }
+    return true;
+  }
   async admit(request: Request, delivery: Delivery): Promise<void> {
     const kind = delivery.kind;
     const label = header(delivery.from, delivery.to, kind);
     const requestedWake = request.wakeOnReply;
-    const resume = kind === 'answer' && (requestedWake ?? (await this.wakeOnReply(delivery.to)));
+    const resume =
+      kind === 'answer'
+        ? (requestedWake ?? (await this.wakeOnReply(delivery.to)))
+        : await this.wakesSubagent(delivery.from, delivery.to);
     await this.ctx.session.synthetic({
       sessionID: delivery.to,
       id: delivery.id,
