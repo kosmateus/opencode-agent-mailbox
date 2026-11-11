@@ -1,22 +1,15 @@
 import { Plugin } from '@opencode/plugin';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
-import { z } from 'zod';
+import { join } from 'node:path';
 import { Mailbox } from './application/mailbox.js';
 import { Dispatcher } from './application/dispatcher.js';
 import { SqliteRepository } from './adapters/sqlite.js';
 import { OpenCodeSessions } from './adapters/opencode.js';
+import { SessionModeStore } from './adapters/session-mode.js';
 import { registerTools, agentInstructions } from './adapters/tools.js';
-const Options = z
-  .object({
-    timeoutMs: z.number().int().min(1000).max(86400000).default(300000),
-    pollMs: z.number().int().min(100).max(10000).default(250),
-    maxPending: z.number().int().min(10).max(10000).default(1000),
-    dataDirectory: z.string().min(1).refine(isAbsolute, 'Must be an absolute path').optional(),
-    toasts: z.boolean().default(true),
-  })
-  .strict();
+import { Options } from './config.js';
+import { MailboxControl, PendingQuestionsInput, SetTreeToggleInput } from './rpc.js';
 export default Plugin.define({
   id: 'agent-mailbox',
   async setup(ctx) {
@@ -34,11 +27,33 @@ export default Plugin.define({
       join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'opencode-agent-mailbox');
     const project = createHash('sha256').update(ctx.location.project.id).digest('hex');
     const repo = await SqliteRepository.open(join(directory, project, 'mailbox.db'), options.maxPending);
-    const sessions = new OpenCodeSessions(ctx, ctx.location.project.id);
-    const mailbox = new Mailbox(repo, sessions, undefined, options.timeoutMs);
+    const sessions = new OpenCodeSessions(ctx, ctx.location.project.id, (sessionID): Promise<boolean> =>
+      mailbox.shouldWakeOnReply(sessionID),
+    );
+    const treeSettings = new SessionModeStore(ctx.storage, ctx.location.project.id);
+    const mailbox = new Mailbox(repo, sessions, undefined, options.timeoutMs, {
+      maxMessageLength: options.maxMessageLength,
+      bidirectional: options.bidirectional,
+      wakeOnReply: options.wakeOnReply,
+      treeSettings,
+    });
     const dispatcher = new Dispatcher(repo, sessions);
     try {
-      const tools = await registerTools(ctx, mailbox);
+      const tools = await registerTools(ctx, mailbox, options.maxMessageLength);
+      const rpc = await ctx.rpc.register(MailboxControl, {
+        setBidirectional: async (input) => {
+          const { sessionID, enabled } = SetTreeToggleInput.parse(input);
+          return mailbox.setBidirectional(sessionID, enabled);
+        },
+        setWakeOnReply: async (input) => {
+          const { sessionID, enabled } = SetTreeToggleInput.parse(input);
+          return mailbox.setWakeOnReply(sessionID, enabled);
+        },
+        pendingQuestions: async (input) => {
+          const { sessionID } = PendingQuestionsInput.parse(input);
+          return mailbox.pendingQuestions(sessionID);
+        },
+      });
       const hook = await ctx.session.hook('context', (event) => {
         event.system.push({ type: 'text', text: agentInstructions });
       });
@@ -56,6 +71,7 @@ export default Plugin.define({
       return async () => {
         clearInterval(timer);
         await tools.dispose();
+        await rpc.dispose();
         await hook.dispose();
         await dispatcher.stop();
         repo.close();

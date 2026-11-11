@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { OpenCode } from '@opencode/client';
+import { createClient } from '@libsql/client';
 const repo = resolve('.');
 await mkdir(join(repo, '.e2e'), { recursive: true });
 const temp = await mkdtemp(join(repo, '.e2e/run-'));
@@ -18,9 +19,16 @@ let logs = '';
 let finished = false;
 let calls = 0;
 const stages = new Map();
+const modeTargets = new Map();
+const modeMessages = new Map();
+const modeOptions = new Map();
 const traces = [];
 const errors = [];
+const WAKE_ANSWER_TAIL = 'MAILBOX_WAKE_ANSWER_END';
+let wakeOriginAnswerReads = 0;
+let wakeAnswerTailRead = false;
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+const isIdle = ({ time }) => time.busy === undefined || (time.idle !== undefined && time.idle >= time.busy);
 const textOf = (content) => (typeof content === 'string' ? content : JSON.stringify(content));
 const call = (name, args, id) => ({
   id: id ?? `call_${calls++}`,
@@ -33,7 +41,7 @@ const childID = (messages, role) => {
 };
 function decide(body) {
   const user = body.messages.find((m) => m.role === 'user' && /ROLE=/.test(textOf(m.content)));
-  const role = textOf(user?.content ?? '').match(/ROLE=([A-Z0-9]+)/)?.[1];
+  const role = textOf(user?.content ?? '').match(/ROLE=([A-Z0-9_]+)/)?.[1];
   if (!role) return { text: 'Test session' };
   const stage = stages.get(role) ?? 0;
   const tools = body.tools?.map((t) => t.function.name) ?? [];
@@ -44,6 +52,63 @@ function decide(body) {
     .join('\n');
   const requestID = synthetic.match(/req_[a-f0-9]{64}/)?.[0];
   traces.push({ role, stage, requestID, time: Date.now() });
+  if (role.startsWith('MODE_')) {
+    const target = modeTargets.get(role);
+    if (!target) throw new Error(`No mailbox target configured for ${role}`);
+    if (stage === 0) {
+      stages.set(role, 1);
+      return {
+        tools: [
+          call('ask_subagent', {
+            sessionID: target,
+            message: modeMessages.get(role),
+            ...modeOptions.get(role),
+          }),
+        ],
+      };
+    }
+    return { text: `${role} completed.` };
+  }
+  if (role === 'WAKE_ORIGIN' || role === 'WAKE_SILENT_ORIGIN') {
+    if (stage === 0) {
+      stages.set(role, 1);
+      return {
+        tools: [
+          call('ask_subagent', {
+            sessionID: modeTargets.get(role),
+            message: 'MAILBOX_WAKE_QUESTION',
+            timeoutMs: 60000,
+            wakeOnReply: role === 'WAKE_ORIGIN',
+          }),
+        ],
+      };
+    }
+    if (stage === 1) {
+      stages.set(role, 2);
+      return { text: 'Origin run finished while its answer was pending.' };
+    }
+    if (synthetic.includes('"kind":"answer"') || /"kind"\s*:\s*"answer"/.test(synthetic)) {
+      wakeOriginAnswerReads++;
+      wakeAnswerTailRead = synthetic.includes(WAKE_ANSWER_TAIL);
+      stages.set(role, 3);
+      return { text: `Read answer ending ${WAKE_ANSWER_TAIL}.` };
+    }
+    return { text: 'Origin is idle until its answer arrives.' };
+  }
+  if (role === 'WAKE_RECIPIENT' || role === 'WAKE_SILENT_RECIPIENT') {
+    if (stage < 2 && requestID) {
+      stages.set(role, stage + 1);
+      return {
+        tools: [
+          call('reply_request', {
+            requestID,
+            message: `${'x'.repeat((stage === 0 ? 4001 : 4000) - WAKE_ANSWER_TAIL.length)}${WAKE_ANSWER_TAIL}`,
+          }),
+        ],
+      };
+    }
+    return { text: 'Recipient completed its answer.' };
+  }
   const spawn = (next) =>
     call(
       'subagent',
@@ -209,6 +274,261 @@ try {
   }
   const deadline = Date.now() + 90000;
   let client = await startHost();
+  const waitUntil = async (description, condition) => {
+    const until = Date.now() + 15000;
+    while (!(await condition())) {
+      assert.ok(Date.now() < until, description);
+      await delay(50);
+    }
+  };
+  const { MailboxControl } = await import(pathToFileURL(join(packagePath, 'dist/rpc.js')).href);
+  const modeRoot = await client.session.create({ location: { directory: root }, title: 'Mailbox mode root' });
+  const modeSibling = await client.session.create({
+    parentID: modeRoot.id,
+    location: { directory: root },
+    title: 'Mailbox mode sibling',
+  });
+  const otherRoot = await client.session.create({
+    location: { directory: root },
+    title: 'Unrelated mailbox root',
+  });
+  const runModeRequest = async (role, targetSessionID, message = `MAILBOX_${role}`, options = {}) => {
+    const sender = await client.session.create({
+      parentID: modeRoot.id,
+      location: { directory: root },
+      title: `Mailbox ${role} sender`,
+      permissions: [{ action: '*', resource: '*', effect: 'allow' }],
+    });
+    modeTargets.set(role, targetSessionID);
+    modeMessages.set(role, message);
+    modeOptions.set(role, options);
+    stages.set(role, 0);
+    await client.session.prompt({ sessionID: sender.id, text: `ROLE=${role}. Test mailbox authorization.` });
+    await client.experimental.session.wait({ sessionID: sender.id }, { signal: AbortSignal.timeout(15000) });
+    const context = await client.session.context({ sessionID: sender.id });
+    const toolCall = context
+      .filter((message) => message.type === 'assistant')
+      .flatMap((message) => message.content.filter((item) => item.type === 'tool'))
+      .find((item) => item.name === 'ask_subagent' && item.state.input.message === message);
+    assert.ok(toolCall, `${role} must invoke ask_subagent`);
+    const content = toolCall.state.content.find((item) => item.type === 'text')?.text;
+    assert.ok(content, `${role} must return JSON tool output`);
+    return { result: JSON.parse(content), senderID: sender.id };
+  };
+  const waitForInbox = async (sessionID) => {
+    const inboxDeadline = Date.now() + 10000;
+    let inbox = [];
+    while (Date.now() < inboxDeadline) {
+      inbox = await client.session.inbox.list({ sessionID });
+      if (inbox.length) return inbox;
+      await delay(100);
+    }
+    return inbox;
+  };
+  const { result: defaultModeResult, senderID: defaultModeSender } = await runModeRequest(
+    'MODE_DEFAULT',
+    modeSibling.id,
+  );
+  assert.equal(defaultModeResult.ok, false, 'Bidirectional mode must be off by default');
+  assert.equal(defaultModeResult.error.code, 'FORBIDDEN');
+  const modeOn = await client
+    .rpc(MailboxControl)
+    .setBidirectional({ sessionID: defaultModeSender }, { location: { directory: root } });
+  assert.deepEqual(modeOn, { rootSessionID: modeRoot.id, enabled: true });
+  const treeWakeOff = await client
+    .rpc(MailboxControl)
+    .setWakeOnReply({ sessionID: defaultModeSender, enabled: false }, { location: { directory: root } });
+  assert.deepEqual(treeWakeOff, { rootSessionID: modeRoot.id, enabled: false });
+  const { result: siblingModeResult } = await runModeRequest('MODE_SIBLING', modeSibling.id);
+  assert.equal(siblingModeResult.ok, true, 'User-enabled mode must allow sibling questions');
+  const siblingInbox = await waitForInbox(modeSibling.id);
+  assert.equal(siblingInbox.length, 1);
+  assert.equal((await client.session.get({ sessionID: modeSibling.id })).time.busy, undefined);
+
+  const longRecipient = await client.session.create({
+    parentID: modeRoot.id,
+    location: { directory: root },
+    title: '4000-character recipient',
+  });
+  const tooLongRecipient = await client.session.create({
+    parentID: modeRoot.id,
+    location: { directory: root },
+    title: '4001-character recipient',
+  });
+  const notificationRecipient = await client.session.create({
+    parentID: modeRoot.id,
+    location: { directory: root },
+    title: 'Informational notification recipient',
+  });
+  const longTail = 'MAILBOX_E2E_END_4000';
+  const message4000 = `${'x'.repeat(4000 - longTail.length)}${longTail}`;
+  const message4001 = `${'x'.repeat(4001 - longTail.length)}${longTail}`;
+  assert.equal([...message4000].length, 4000);
+  assert.equal([...message4001].length, 4001);
+  const { result: accepted4000, senderID: longSender } = await runModeRequest(
+    'MODE_LONG',
+    longRecipient.id,
+    message4000,
+  );
+  assert.equal(accepted4000.ok, true, 'A 4000-code-point message must be accepted');
+  const longPending = await client
+    .rpc(MailboxControl)
+    .pendingQuestions({ sessionID: longSender }, { location: { directory: root } });
+  assert.equal(longPending.count, 1);
+  assert.ok(longPending.nextExpiresAt > Date.now());
+  assert.deepEqual(Object.keys(longPending).sort(), ['count', 'nextExpiresAt']);
+  const acceptedInbox = await waitForInbox(longRecipient.id);
+  const acceptedPayload = JSON.parse(acceptedInbox[0].payload.text);
+  assert.equal(acceptedPayload.requestID, accepted4000.requestID);
+  assert.equal(acceptedPayload.message, message4000);
+  assert.ok(
+    acceptedPayload.message.endsWith(longTail),
+    'The complete message ending must reach the recipient',
+  );
+  assert.equal((await client.session.get({ sessionID: longRecipient.id })).time.busy, undefined);
+  const { result: rejected4001 } = await runModeRequest('MODE_TOO_LONG', tooLongRecipient.id, message4001);
+  assert.equal(rejected4001.ok, false);
+  assert.equal(rejected4001.error.code, 'INVALID_INPUT');
+  assert.deepEqual(await client.session.inbox.list({ sessionID: tooLongRecipient.id }), []);
+  assert.equal(
+    (await client.session.context({ sessionID: tooLongRecipient.id })).some(
+      (item) => item.type === 'synthetic' && item.metadata?.agentMailbox,
+    ),
+    false,
+  );
+
+  const { result: notificationResult, senderID: notificationSender } = await runModeRequest(
+    'MODE_NOTIFICATION',
+    notificationRecipient.id,
+    'MAILBOX_INFORMATION_ONLY',
+    { requiresReply: false },
+  );
+  assert.equal(notificationResult.ok, true);
+  assert.deepEqual(
+    await client
+      .rpc(MailboxControl)
+      .pendingQuestions({ sessionID: notificationSender }, { location: { directory: root } }),
+    { count: 0 },
+    'Informational notifications are excluded from pending-question counts',
+  );
+  const notificationInbox = await waitForInbox(notificationRecipient.id);
+  assert.equal(notificationInbox[0].payload.metadata.agentMailbox.kind, 'notification');
+  assert.equal((await client.session.get({ sessionID: notificationRecipient.id })).time.busy, undefined);
+  const notificationRequestID = notificationResult.requestID;
+
+  const wakeOrigin = await client.session.create({
+    location: { directory: root },
+    title: 'Idle answer origin',
+    permissions: [{ action: '*', resource: '*', effect: 'allow' }],
+  });
+  const wakeRecipient = await client.session.create({
+    parentID: wakeOrigin.id,
+    location: { directory: root },
+    title: 'Question recipient',
+    permissions: [{ action: '*', resource: '*', effect: 'allow' }],
+  });
+  const wakeTreeOff = await client
+    .rpc(MailboxControl)
+    .setWakeOnReply({ sessionID: wakeOrigin.id, enabled: false }, { location: { directory: root } });
+  assert.deepEqual(wakeTreeOff, { rootSessionID: wakeOrigin.id, enabled: false });
+  modeTargets.set('WAKE_ORIGIN', wakeRecipient.id);
+  stages.set('WAKE_ORIGIN', 0);
+  await client.session.prompt({ sessionID: wakeOrigin.id, text: 'ROLE=WAKE_ORIGIN. Ask and then finish.' });
+  await client.experimental.session.wait(
+    { sessionID: wakeOrigin.id },
+    { signal: AbortSignal.timeout(15000) },
+  );
+  const wakeQuestionInbox = await waitForInbox(wakeRecipient.id);
+  assert.equal(wakeQuestionInbox[0].payload.metadata.agentMailbox.kind, 'question');
+  assert.equal((await client.session.get({ sessionID: wakeRecipient.id })).time.busy, undefined);
+  await waitUntil(
+    'The original run must finish before testing reply wake-up',
+    async () =>
+      stages.get('WAKE_ORIGIN') === 2 && isIdle(await client.session.get({ sessionID: wakeOrigin.id })),
+  );
+  assert.equal(isIdle(await client.session.get({ sessionID: wakeOrigin.id })), true);
+
+  stages.set('WAKE_RECIPIENT', 0);
+  await client.session.prompt({
+    sessionID: wakeRecipient.id,
+    text: 'ROLE=WAKE_RECIPIENT. Answer the question.',
+  });
+  await client.experimental.session.wait(
+    { sessionID: wakeRecipient.id },
+    { signal: AbortSignal.timeout(15000) },
+  );
+  await client.experimental.session.wait(
+    { sessionID: wakeOrigin.id },
+    { signal: AbortSignal.timeout(15000) },
+  );
+  await waitUntil(
+    'The idle origin must consume its answer and finish',
+    async () => wakeOriginAnswerReads === 1 && isIdle(await client.session.get({ sessionID: wakeOrigin.id })),
+  );
+  assert.equal(wakeOriginAnswerReads, 1, 'The answer must wake the idle sender exactly once');
+  assert.equal(wakeAnswerTailRead, true, 'The resumed sender must read the answer ending');
+  const wakeOriginContext = await client.session.context({ sessionID: wakeOrigin.id });
+  const wakeAnswers = wakeOriginContext.filter(
+    (item) => item.type === 'synthetic' && item.metadata?.agentMailbox?.kind === 'answer',
+  );
+  assert.equal(wakeAnswers.length, 1, 'The answer must be admitted once to the sender transcript');
+  assert.ok(wakeAnswers[0].text.includes(WAKE_ANSWER_TAIL));
+  assert.equal([...JSON.parse(wakeAnswers[0].text).message].length, 4000);
+  const recipientContext = await client.session.context({ sessionID: wakeRecipient.id });
+  const replyResults = recipientContext
+    .filter((item) => item.type === 'assistant')
+    .flatMap((item) => item.content.filter((part) => part.type === 'tool' && part.name === 'reply_request'))
+    .map((item) => JSON.parse(item.state.content.find((part) => part.type === 'text').text));
+  assert.equal(replyResults[0].error.code, 'INVALID_INPUT', '4001-character replies must fail');
+  assert.equal(replyResults[1].ok, true, '4000-character replies must succeed');
+  assert.equal(isIdle(await client.session.get({ sessionID: wakeOrigin.id })), true);
+
+  const silentOrigin = await client.session.create({
+    location: { directory: root },
+    title: 'Silent answer origin',
+    permissions: [{ action: '*', resource: '*', effect: 'allow' }],
+  });
+  const silentRecipient = await client.session.create({
+    parentID: silentOrigin.id,
+    location: { directory: root },
+    title: 'Silent answer recipient',
+    permissions: [{ action: '*', resource: '*', effect: 'allow' }],
+  });
+  modeTargets.set('WAKE_SILENT_ORIGIN', silentRecipient.id);
+  await client.session.prompt({
+    sessionID: silentOrigin.id,
+    text: 'ROLE=WAKE_SILENT_ORIGIN. Ask without wake-up.',
+  });
+  await waitUntil(
+    'Silent origin must finish its question run',
+    async () =>
+      stages.get('WAKE_SILENT_ORIGIN') === 2 &&
+      isIdle(await client.session.get({ sessionID: silentOrigin.id })),
+  );
+  await waitForInbox(silentRecipient.id);
+  await client.session.prompt({ sessionID: silentRecipient.id, text: 'ROLE=WAKE_SILENT_RECIPIENT. Answer.' });
+  const silentAnswers = await waitForInbox(silentOrigin.id);
+  assert.equal(silentAnswers[0].payload.metadata.agentMailbox.kind, 'answer');
+  assert.ok(JSON.parse(silentAnswers[0].payload.text).message.endsWith(WAKE_ANSWER_TAIL));
+  await delay(300);
+  assert.equal(
+    stages.get('WAKE_SILENT_ORIGIN'),
+    2,
+    'Explicit false must override the default wake-on-reply true',
+  );
+  assert.equal(isIdle(await client.session.get({ sessionID: silentOrigin.id })), true);
+
+  const { result: otherTreeResult } = await runModeRequest('MODE_OTHER_TREE', otherRoot.id);
+  assert.equal(otherTreeResult.ok, false, 'User-enabled mode must not cross session-tree roots');
+  assert.equal(otherTreeResult.error.code, 'FORBIDDEN');
+  const modeOff = await client
+    .rpc(MailboxControl)
+    .setBidirectional({ sessionID: modeSibling.id }, { location: { directory: root } });
+  assert.deepEqual(modeOff, { rootSessionID: modeRoot.id, enabled: false });
+  const { result: disabledModeResult } = await runModeRequest('MODE_DISABLED', modeSibling.id);
+  assert.equal(disabledModeResult.ok, false, 'A user can restore descendant-only mode for the whole tree');
+  assert.equal(disabledModeResult.error.code, 'FORBIDDEN');
+
   const session = await client.session.create({
     location: { directory: root },
     title: 'Mailbox E2E A',
@@ -286,7 +606,40 @@ try {
   const { SqliteRepository } = await import(pathToFileURL(join(packagePath, 'dist/adapters/sqlite.js')).href);
   const { Mailbox } = await import(pathToFileURL(join(packagePath, 'dist/application/mailbox.js')).href);
   const projectHash = createHash('sha256').update(session.projectID).digest('hex');
-  const recoveryRepo = await SqliteRepository.open(join(temp, 'mailbox', projectHash, 'mailbox.db'));
+  const databasePath = join(temp, 'mailbox', projectHash, 'mailbox.db');
+  const database = createClient({ url: pathToFileURL(databasePath).href });
+  const records = (await database.execute('SELECT body FROM requests')).rows.map((row) =>
+    JSON.parse(String(row.body)),
+  );
+  database.close();
+  const notificationRecord = records.find((request) => request.id === notificationRequestID);
+  assert.equal(notificationRecord?.requiresReply, false);
+  assert.equal(
+    notificationRecord?.state,
+    'notified',
+    'Informational requests must not remain pending for a reply',
+  );
+  assert.ok(
+    notificationRecord?.outbox.some((item) => item.kind === 'notification' && item.state === 'admitted'),
+  );
+  assert.ok(
+    records.some(
+      (request) =>
+        request.id === accepted4000.requestID &&
+        request.question === message4000 &&
+        request.outbox.some((item) => item.text === message4000),
+    ),
+    'The full 4000-code-point message must be present in the durable request and outbox',
+  );
+  assert.equal(
+    records.some(
+      (request) =>
+        request.question === message4001 || request.outbox.some((item) => item.text === message4001),
+    ),
+    false,
+    'Rejected 4001-code-point message must leave no request or outbox entry',
+  );
+  const recoveryRepo = await SqliteRepository.open(databasePath);
   const recoveryMailbox = new Mailbox(recoveryRepo, {
     get: async (id) => {
       const info = id === session.id ? session : idle;
@@ -344,6 +697,14 @@ try {
     restartRecovery: true,
     idleNotWoken: true,
     hostDeduplication: true,
+    userControlledBidirectional: true,
+    sessionToggleWithoutArguments: true,
+    complete4000CharacterQuestionsAndAnswers: true,
+    rejected4001CharacterQuestionsAndAnswers: true,
+    informationalNotificationSettled: true,
+    idleSenderWokenByReply: true,
+    perRequestWakeOverridesTree: true,
+    perRequestNoWakeOverridesDefault: true,
     nativeBackgroundCalls: toolCalls.filter((c) => c.name === 'subagent' && c.state.input.background === true)
       .length,
     model: 'deterministic local OpenAI-compatible provider; no external credentials',

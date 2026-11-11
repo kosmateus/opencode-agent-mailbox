@@ -1,10 +1,11 @@
 import { z } from 'zod';
 export const SessionID = z.string().min(1).max(256);
-export const Text = z.string().trim().min(1).max(16000);
+export const MAX_TEXT_CODE_UNITS = 16000;
+export const Text = z.string().min(1).max(MAX_TEXT_CODE_UNITS).regex(/\S/u);
 export const RequestID = z.string().regex(/^req_[a-f0-9]{64}$/);
 export const Delivery = z.object({
   id: z.string(),
-  kind: z.enum(['question', 'answer']),
+  kind: z.enum(['question', 'answer', 'notification']),
   from: SessionID,
   to: SessionID,
   text: Text,
@@ -23,7 +24,9 @@ export const Request = z.object({
   route: z.array(SessionID).min(2),
   createdAt: z.number(),
   expiresAt: z.number(),
-  state: z.enum(['pending', 'answered', 'cancelled', 'expired', 'failed']),
+  requiresReply: z.boolean().default(true),
+  wakeOnReply: z.boolean().optional(),
+  state: z.enum(['pending', 'answered', 'notified', 'cancelled', 'expired', 'failed']),
   answer: z.object({ by: SessionID, text: Text }).optional(),
   outbox: z.array(Delivery),
 });
@@ -46,6 +49,21 @@ export class MailboxError extends Error {
     super(message);
     this.name = 'MailboxError';
   }
+}
+export function parseMessage(value: unknown, maxMessageLength: number): string {
+  const parsed = Text.safeParse(value);
+  if (!parsed.success)
+    throw new MailboxError(
+      'INVALID_INPUT',
+      `message must be nonempty and no more than ${MAX_TEXT_CODE_UNITS} UTF-16 code units.`,
+    );
+  const length = [...parsed.data].length;
+  if (length > maxMessageLength)
+    throw new MailboxError(
+      'INVALID_INPUT',
+      `message exceeds maxMessageLength (${maxMessageLength} Unicode code points).`,
+    );
+  return parsed.data;
 }
 export interface Session {
   id: string;

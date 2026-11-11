@@ -22,12 +22,5 @@ export default {
         assets: [{ path: 'release-artifacts/*.tgz', label: 'npm package' }],
       },
     ],
-    [
-      '@semantic-release/git',
-      {
-        assets: ['package.json', 'package-lock.json'],
-        message: 'chore(release): ${nextRelease.version}',
-      },
-    ],
   ],
 };

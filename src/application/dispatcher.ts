@@ -57,6 +57,7 @@ export class Dispatcher {
           if (d) {
             d.state = 'admitted';
             delete d.error;
+            if (d.kind === 'notification' && r.state === 'pending') r.state = 'notified';
           }
           return { request: r, result: undefined };
         });
