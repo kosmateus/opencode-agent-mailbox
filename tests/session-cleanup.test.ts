@@ -44,7 +44,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await dispatcher.stop();
-  repo.close();
+  await repo.close();
   await rm(directory, { recursive: true, force: true });
 });
 
@@ -80,7 +80,7 @@ describe('session deletion cleanup', () => {
       expect(await repo.get(stale.id)).toBeUndefined();
       expect(await repo.active()).toEqual([]);
     } finally {
-      other.close();
+      await other.close();
     }
   });
   it('retains content-free deletion guards after a repository restart', async () => {
@@ -88,7 +88,7 @@ describe('session deletion cleanup', () => {
     const stale = (await repo.get(question.requestID))!;
     await cleanup.remove('B');
     await dispatcher.stop();
-    repo.close();
+    await repo.close();
     repo = await SqliteRepository.open(join(directory, 'mailbox.db'));
     dispatcher = new Dispatcher(repo, host);
     await expect(repo.update(stale.id, () => ({ request: stale, result: undefined }))).rejects.toMatchObject({

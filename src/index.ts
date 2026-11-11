@@ -92,12 +92,12 @@ export default Plugin.define({
         await rpc.dispose();
         await hook.dispose();
         await dispatcher.stop();
-        repo.close();
+        await repo.close();
       };
     } catch (error) {
       await stopCleanup();
       await dispatcher.stop();
-      repo.close();
+      await repo.close();
       throw error;
     }
   },
