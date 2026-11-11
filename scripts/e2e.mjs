@@ -283,6 +283,46 @@ try {
   };
   const { MailboxControl } = await import(pathToFileURL(join(packagePath, 'dist/rpc.js')).href);
   const modeRoot = await client.session.create({ location: { directory: root }, title: 'Mailbox mode root' });
+  const otherProject = join(temp, 'other-project');
+  await mkdir(otherProject);
+  execFileSync('git', ['init', otherProject], { stdio: 'pipe' });
+  execFileSync(
+    'git',
+    [
+      '-C',
+      otherProject,
+      '-c',
+      'user.name=Mailbox Test',
+      '-c',
+      'user.email=test@example.invalid',
+      'commit',
+      '--allow-empty',
+      '-m',
+      `Isolated project ${randomUUID()}`,
+    ],
+    { stdio: 'pipe' },
+  );
+  await writeFile(join(otherProject, 'opencode.json'), JSON.stringify(config));
+  const foreignSession = await client.session.create({
+    location: { directory: otherProject },
+    title: 'Foreign project session',
+  });
+  assert.notEqual(foreignSession.projectID, modeRoot.projectID);
+  await assert.rejects(
+    client
+      .rpc(MailboxControl)
+      .pendingQuestions({ sessionID: foreignSession.id }, { location: { directory: root } }),
+    (error) => error.type === 'session_unavailable' && error.data.code === 'FORBIDDEN',
+    'Cross-project RPC must stay forbidden and return a declared error, not a handler defect',
+  );
+  assert.deepEqual(
+    await client
+      .rpc(MailboxControl)
+      .pendingQuestions({ sessionID: foreignSession.id }, { location: foreignSession.location }),
+    { count: 0 },
+    'The same session must work when the RPC is routed to its own location',
+  );
+  await client.session.remove({ sessionID: foreignSession.id });
   const modeSibling = await client.session.create({
     parentID: modeRoot.id,
     location: { directory: root },
@@ -698,6 +738,7 @@ try {
     idleNotWoken: true,
     hostDeduplication: true,
     userControlledBidirectional: true,
+    rpcSessionLocationIsolation: true,
     sessionToggleWithoutArguments: true,
     complete4000CharacterQuestionsAndAnswers: true,
     rejected4001CharacterQuestionsAndAnswers: true,

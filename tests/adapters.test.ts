@@ -191,6 +191,7 @@ describe('official OpenCode adapter contracts', () => {
     const ctx = {
       keymap: { layer: (factory: NonNullable<typeof layer>) => (layer = factory) },
       ui: { router: { current: () => ({ type: 'session', sessionID: 'ses_child' }) }, toast: { show } },
+      data: { session: { get: () => ({ location: { directory: '/test-project' } }) } },
       client: { rpc: () => ({ setBidirectional, setWakeOnReply }) },
     } as unknown as Context;
 
@@ -203,7 +204,7 @@ describe('official OpenCode adapter contracts', () => {
     await bidirectional?.run('on');
     expect(setBidirectional).toHaveBeenCalledWith(
       { sessionID: 'ses_child', enabled: true },
-      { location: undefined },
+      { location: { directory: '/test-project' } },
     );
     expect(show).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -213,12 +214,12 @@ describe('official OpenCode adapter contracts', () => {
     await bidirectional?.run('off');
     expect(setBidirectional).toHaveBeenLastCalledWith(
       { sessionID: 'ses_child', enabled: false },
-      { location: undefined },
+      { location: { directory: '/test-project' } },
     );
     await wakeOnReply?.run('off');
     expect(setWakeOnReply).toHaveBeenCalledWith(
       { sessionID: 'ses_child', enabled: false },
-      { location: undefined },
+      { location: { directory: '/test-project' } },
     );
     expect(show).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -228,7 +229,7 @@ describe('official OpenCode adapter contracts', () => {
     await wakeOnReply?.run('on');
     expect(setWakeOnReply).toHaveBeenLastCalledWith(
       { sessionID: 'ses_child', enabled: true },
-      { location: undefined },
+      { location: { directory: '/test-project' } },
     );
     await bidirectional?.run('invalid');
     expect(setBidirectional).toHaveBeenCalledTimes(2);
@@ -236,10 +237,16 @@ describe('official OpenCode adapter contracts', () => {
       expect.objectContaining({ message: expect.stringContaining('Usage: /mailbox-bidirectional [on|off]') }),
     );
     await bidirectional?.run();
-    expect(setBidirectional).toHaveBeenLastCalledWith({ sessionID: 'ses_child' }, { location: undefined });
+    expect(setBidirectional).toHaveBeenLastCalledWith(
+      { sessionID: 'ses_child' },
+      { location: { directory: '/test-project' } },
+    );
     setWakeOnReply.mockResolvedValueOnce({ rootSessionID: 'ses_root', enabled: false });
     await wakeOnReply?.run();
-    expect(setWakeOnReply).toHaveBeenLastCalledWith({ sessionID: 'ses_child' }, { location: undefined });
+    expect(setWakeOnReply).toHaveBeenLastCalledWith(
+      { sessionID: 'ses_child' },
+      { location: { directory: '/test-project' } },
+    );
   });
 
   it('persists mode by both project and session-tree root', async () => {

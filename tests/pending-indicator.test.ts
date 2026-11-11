@@ -100,4 +100,16 @@ describe('pending reply indicator', () => {
     expect(h.render('ses_origin')).toBeNull();
     h.cleanup();
   });
+  it('backs off failures instead of sending a failing RPC every second', async () => {
+    const h = harness();
+    h.select('ses_origin');
+    h.pendingQuestions.mockRejectedValue(new Error('Session is outside this project.'));
+    try {
+      h.render('ses_origin');
+      await vi.advanceTimersByTimeAsync(120000);
+      expect(h.pendingQuestions.mock.calls.length).toBeLessThanOrEqual(5);
+    } finally {
+      h.cleanup();
+    }
+  });
 });

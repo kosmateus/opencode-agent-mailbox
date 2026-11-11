@@ -9,6 +9,7 @@ import { OpenCodeSessions } from './adapters/opencode.js';
 import { SessionModeStore } from './adapters/session-mode.js';
 import { registerTools, agentInstructions } from './adapters/tools.js';
 import { Options } from './config.js';
+import { MailboxError } from './domain/model.js';
 import { MailboxControl, PendingQuestionsInput, SetTreeToggleInput } from './rpc.js';
 export default Plugin.define({
   id: 'agent-mailbox',
@@ -49,9 +50,20 @@ export default Plugin.define({
           const { sessionID, enabled } = SetTreeToggleInput.parse(input);
           return mailbox.setWakeOnReply(sessionID, enabled);
         },
-        pendingQuestions: async (input) => {
+        pendingQuestions: async (input, context) => {
           const { sessionID } = PendingQuestionsInput.parse(input);
-          return mailbox.pendingQuestions(sessionID);
+          try {
+            return await mailbox.pendingQuestions(sessionID);
+          } catch (error) {
+            if (
+              error instanceof MailboxError &&
+              (error.code === 'FORBIDDEN' || error.code === 'SESSION_UNAVAILABLE')
+            )
+              return context.error('session_unavailable', 'Session is unavailable in this project.', {
+                code: error.code,
+              });
+            throw error;
+          }
         },
       });
       const hook = await ctx.session.hook('context', (event) => {
