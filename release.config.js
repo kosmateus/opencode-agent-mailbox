@@ -4,7 +4,6 @@ export default {
   plugins: [
     './scripts/release-policy.mjs',
     ['@semantic-release/release-notes-generator', { preset: 'conventionalcommits' }],
-    ['@semantic-release/npm', { npmPublish: true, tarballDir: 'release-artifacts' }],
     [
       '@semantic-release/exec',
       {
@@ -12,6 +11,7 @@ export default {
         prepareCmd: 'npm run build && npm run pack:check',
       },
     ],
+    ['@semantic-release/npm', { npmPublish: true, tarballDir: 'release-artifacts' }],
     [
       '@semantic-release/github',
       {
