@@ -5,6 +5,20 @@ import type { Context } from '@opencode/plugin/tui/plugin';
 import { OpenCodeSessions, summary } from '../src/adapters/opencode.js';
 import type { Request } from '../src/domain/model.js';
 import tui from '../src/tui.js';
+vi.mock('@opentui/core', () => ({ TextRenderable: class {} }));
+
+function pendingSupport() {
+  return {
+    client: { rpc: () => ({ pendingQuestions: async () => ({ count: 0 }) }) },
+    storage: {
+      memory: (_key: string, { initial }: { initial: unknown }) => [
+        initial,
+        (update: (draft: unknown) => void) => update(initial),
+      ],
+    },
+    ui: { router: { current: () => ({ type: 'home' }) }, slot: () => vi.fn() },
+  };
+}
 
 describe('mailbox transcript', () => {
   it.each([
@@ -49,13 +63,21 @@ describe('mailbox transcript', () => {
   ])('does not subscribe for %s toast options', async (_state, options) => {
     const on = vi.fn();
     const toast = vi.fn();
-    const ctx = { options, data: { on }, ui: { toast: { show: toast } } } as unknown as Context;
+    const support = pendingSupport();
+    const ctx = {
+      ...support,
+      options,
+      keymap: { layer: vi.fn() },
+      data: { on },
+      ui: { ...support.ui, toast: { show: toast } },
+    } as unknown as Context;
 
     const cleanup = await tui.setup(ctx);
 
-    expect(cleanup).toBeUndefined();
+    expect(cleanup).toBeTypeOf('function');
     expect(on).not.toHaveBeenCalled();
     expect(toast).not.toHaveBeenCalled();
+    await cleanup?.();
   });
 
   it('keeps explicit toasts opt-in, informational, sanitized, and deduplicated', async () => {
@@ -63,19 +85,18 @@ describe('mailbox transcript', () => {
     let callback: ((event: Enqueued) => void) | undefined;
     const unsubscribe = vi.fn();
     const toast = vi.fn();
-    const state = { seen: [] as string[] };
+    const support = pendingSupport();
     const ctx = {
+      ...support,
       options: { toasts: true },
-      storage: {
-        memory: () => [state, (update: (draft: typeof state) => void) => update(state)],
-      },
+      keymap: { layer: vi.fn() },
       data: {
         on: (_type: string, handler: (event: Enqueued) => void) => {
           callback = handler;
           return unsubscribe;
         },
       },
-      ui: { toast: { show: toast } },
+      ui: { ...support.ui, toast: { show: toast } },
     } as unknown as Context;
     const event = {
       type: 'session.inbox.enqueued',

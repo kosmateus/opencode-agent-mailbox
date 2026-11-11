@@ -1,6 +1,6 @@
 # Owner setup and releases
 
-The README is for plugin users. These instructions are for the maintainer. No repository or package is published by the supplied project.
+The README is for plugin users. These instructions are for the maintainer.
 
 ## One-time setup
 
@@ -34,7 +34,7 @@ After successful OIDC publication you may select npm's "Require two-factor authe
 
 ## Automatic releases
 
-Every push/merge to the default `main` or `master` branch runs reproducible `npm ci`, typecheck, lint, tests, build, package inspection and real-host E2E. Only then semantic-release evaluates commits since the last reachable release tag:
+Every merged non-Dependabot PR to the default branch (or manual Release dispatch) runs reproducible `npm ci`, typecheck, lint, tests, build, package inspection and real-host E2E. Only then semantic-release evaluates commits since the last reachable release tag:
 
 - breaking change (`!` or `BREAKING CHANGE`) -> MAJOR;
 - `feat` -> MINOR;
@@ -44,7 +44,7 @@ Every push/merge to the default `main` or `master` branch runs reproducible `npm
 
 The default branch is resolved from GitHub; a repository containing both main and master does not run two release lines. A global release concurrency group prevents overlapping publication jobs. No version commits are pushed, so the workflow cannot loop on its own commits.
 
-`@semantic-release/npm` synchronizes package.json and package-lock.json in the **release workspace and published tarball**. The main branch retains the development version `0.0.0`; Git tags are the authoritative release history. This standard commit-free approach preserves branch protection. A tag's GitHub-generated source archive therefore retains the development manifest version; use the attached npm tarball for the versioned, built distribution. Do not expect a bot version commit on main.
+`@semantic-release/npm` synchronizes package.json and package-lock.json in the **release workspace and published tarball**. The main branch retains its checked-in baseline version; Git tags are the authoritative release history. This commit-free approach preserves branch protection. A tag's GitHub-generated source archive therefore retains the baseline manifest version; use the attached npm tarball for the versioned, built distribution. Do not expect a bot version commit on main.
 
 The workflow creates a Git tag and GitHub Release with the npm tarball. npm OIDC automatically supplies provenance for a public repository and public package. Publication is immutable; a registry check rejects an already published candidate version. The workflow needs no issue/PR write permission because semantic-release comments and release labels are disabled.
 

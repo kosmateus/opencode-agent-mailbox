@@ -1,6 +1,20 @@
 import { it, expect } from 'vitest';
 import { analyzeCommits } from '@semantic-release/commit-analyzer';
+import releaseConfig from '../release.config.js';
 const logger = { log: () => {} };
+
+it('publishes without pushing a release commit to the protected branch', () => {
+  const pluginNames = releaseConfig.plugins.map((plugin) => (Array.isArray(plugin) ? plugin[0] : plugin));
+  expect(pluginNames).not.toContain('@semantic-release/git');
+  expect(pluginNames).toContain('@semantic-release/npm');
+  expect(pluginNames).toContain('@semantic-release/github');
+  expect(
+    releaseConfig.plugins.find(
+      (plugin) => Array.isArray(plugin) && plugin[0] === '@semantic-release/npm',
+    )?.[1],
+  ).toMatchObject({ npmPublish: true, tarballDir: 'release-artifacts' });
+});
+
 it.each([
   ['fix: repair routing', 'patch'],
   ['feat: add routing', 'minor'],

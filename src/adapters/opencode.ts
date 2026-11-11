@@ -50,9 +50,9 @@ export class OpenCodeSessions implements Sessions {
     }
   }
   async admit(request: Request, delivery: Delivery): Promise<void> {
-    const kind = String(delivery.kind);
+    const kind = delivery.kind;
     const label = header(delivery.from, delivery.to, kind);
-    const requestedWake = (request as Request & { wakeOnReply?: boolean }).wakeOnReply;
+    const requestedWake = request.wakeOnReply;
     const resume = kind === 'answer' && (requestedWake ?? (await this.wakeOnReply(delivery.to)));
     await this.ctx.session.synthetic({
       sessionID: delivery.to,

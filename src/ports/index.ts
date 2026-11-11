@@ -14,6 +14,12 @@ export interface Sessions {
   /** Admission is idempotent by delivery.id, never waits for a model. */
   admit(request: Request, delivery: Delivery): Promise<void>;
 }
+export type TreeSetting = 'bidirectional' | 'wakeOnReply';
+/** Optional user overrides scoped to a project's session-tree root. */
+export interface TreeSettings {
+  get(rootSessionID: string, setting: TreeSetting): Promise<boolean | undefined>;
+  set(rootSessionID: string, setting: TreeSetting, enabled: boolean): Promise<void>;
+}
 export interface Clock {
   now(): number;
 }

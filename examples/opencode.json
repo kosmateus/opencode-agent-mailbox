@@ -1,8 +1,16 @@
 {
   "plugins": [
     {
-      "package": "opencode-agent-mailbox",
-      "options": { "timeoutMs": 300000, "pollMs": 250, "maxPending": 1000, "toasts": true }
+      "package": "@opentoria/opencode-agent-mailbox",
+      "options": {
+        "timeoutMs": 300000,
+        "pollMs": 250,
+        "maxPending": 1000,
+        "maxMessageLength": 4000,
+        "bidirectional": false,
+        "wakeOnReply": true,
+        "toasts": false
+      }
     }
   ],
   "experimental": { "subagent_depth": 4 }

@@ -1,14 +1,28 @@
 import { Plugin } from '@opencode/plugin/tui';
 import { z } from 'zod';
-const Notice = z.object({ label: z.string(), kind: z.enum(['question', 'answer']), to: z.string() });
+import { registerSettingsCommands } from './tui-settings.js';
+import { setupPendingIndicator } from './tui-pending.js';
+import { MailboxControl, PendingQuestionsOutput } from './rpc.js';
+const Notice = z.object({
+  label: z.string(),
+  kind: z.enum(['question', 'answer', 'notification']),
+  to: z.string(),
+});
 /** Host transcript renders the synthetic description; toasts are optional and coalesced. */
 export default Plugin.define({
   id: 'agent-mailbox',
   setup(ctx) {
-    if (ctx.options.toasts !== true) return;
+    registerSettingsCommands(ctx);
+    const stopPending = setupPendingIndicator(ctx, {
+      pendingQuestions: async (input) =>
+        PendingQuestionsOutput.parse(
+          await ctx.client.rpc(MailboxControl).pendingQuestions(input, { location: ctx.location }),
+        ),
+    });
+    if (ctx.options.toasts !== true) return stopPending;
     const [state, setState] = ctx.storage.memory<{ seen: string[] }>('notices', { initial: { seen: [] } });
     let lastToast = 0;
-    return ctx.data.on('session.inbox.enqueued', (event) => {
+    const stopNotices = ctx.data.on('session.inbox.enqueued', (event) => {
       const item = event.data.item;
       if (item.type !== 'synthetic') return;
       const notice = Notice.safeParse(item.payload.metadata?.agentMailbox);
@@ -33,5 +47,9 @@ export default Plugin.define({
         duration: 3500,
       });
     });
+    return () => {
+      stopNotices();
+      stopPending();
+    };
   },
 });
