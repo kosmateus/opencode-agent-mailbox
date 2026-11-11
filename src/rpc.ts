@@ -26,6 +26,11 @@ export const MailboxControl = Rpc.define({
     pendingQuestions: {
       input: z.toJSONSchema(PendingQuestionsInput),
       output: z.toJSONSchema(PendingQuestionsOutput),
+      errors: {
+        session_unavailable: {
+          schema: z.toJSONSchema(z.object({ code: z.enum(['FORBIDDEN', 'SESSION_UNAVAILABLE']) }).strict()),
+        },
+      },
     },
   },
   events: {},

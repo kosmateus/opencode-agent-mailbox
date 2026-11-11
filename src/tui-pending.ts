@@ -19,13 +19,13 @@ export function setupPendingIndicator(
     draft.sessions = {};
   });
   const inFlight = new Set<string>();
-  const lastChecked = new Map<string, number>();
+  const nextCheck = new Map<string, number>();
   let active = true;
 
   const refresh = async (sessionID: string) => {
-    if (inFlight.has(sessionID) || Date.now() - (lastChecked.get(sessionID) ?? -Infinity) < 1000) return;
+    if (inFlight.has(sessionID) || Date.now() < (nextCheck.get(sessionID) ?? 0)) return;
     inFlight.add(sessionID);
-    lastChecked.set(sessionID, Date.now());
+    nextCheck.set(sessionID, Date.now() + 1000);
     try {
       const summary = await readModel.pendingQuestions({ sessionID });
       if (active)
@@ -34,6 +34,7 @@ export function setupPendingIndicator(
           else delete draft.sessions[sessionID];
         });
     } catch {
+      nextCheck.set(sessionID, Date.now() + 30000);
       if (active)
         setState((draft) => {
           delete draft.sessions[sessionID];

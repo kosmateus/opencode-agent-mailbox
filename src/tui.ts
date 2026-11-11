@@ -14,10 +14,13 @@ export default Plugin.define({
   setup(ctx) {
     registerSettingsCommands(ctx);
     const stopPending = setupPendingIndicator(ctx, {
-      pendingQuestions: async (input) =>
-        PendingQuestionsOutput.parse(
-          await ctx.client.rpc(MailboxControl).pendingQuestions(input, { location: ctx.location }),
-        ),
+      pendingQuestions: async (input) => {
+        const session = ctx.data.session.get(input.sessionID);
+        if (!session) return { count: 0 };
+        return PendingQuestionsOutput.parse(
+          await ctx.client.rpc(MailboxControl).pendingQuestions(input, { location: session.location }),
+        );
+      },
     });
     if (ctx.options.toasts !== true) return stopPending;
     const [state, setState] = ctx.storage.memory<{ seen: string[] }>('notices', { initial: { seen: [] } });

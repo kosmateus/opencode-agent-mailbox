@@ -38,17 +38,26 @@ function command(ctx: Context, setting: Setting, title: string, slashName: strin
         return;
       }
       const choice = argument ? { enabled: argument === 'on' } : {};
+      const session = ctx.data.session.get(route.sessionID);
+      if (!session) {
+        ctx.ui.toast.show({
+          title: 'Agent mailbox',
+          message: 'This session is not available yet.',
+          variant: 'info',
+        });
+        return;
+      }
       try {
         const control = ctx.client.rpc(MailboxControl);
         const result = SetTreeToggleOutput.parse(
           setting === 'bidirectional'
             ? await control.setBidirectional(
                 { sessionID: route.sessionID, ...choice },
-                { location: ctx.location },
+                { location: session.location },
               )
             : await control.setWakeOnReply(
                 { sessionID: route.sessionID, ...choice },
-                { location: ctx.location },
+                { location: session.location },
               ),
         );
         const { enabled } = result;
