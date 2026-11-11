@@ -2,12 +2,14 @@ import type { Plugin } from '@opencode/plugin';
 import { MailboxError, type Delivery, type Request, type Session } from '../domain/model.js';
 import type { Sessions } from '../ports/index.js';
 export function summary(from: string, to: string, text: string, state: string): string {
-  const clean = (s: string) =>
+  const clean = (s: string, limit: number) =>
     s
-      .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
+      .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, ' ')
       .replace(/\s+/g, ' ')
-      .slice(0, 160);
-  return `[${clean(from)} -> ${clean(to)}] ${clean(text)} (${state})`;
+      .trim()
+      .slice(0, limit);
+  const kind = state === 'question' ? 'Question queued' : state === 'answer' ? 'Reply queued' : state;
+  return `Mailbox · ${clean(kind, 32)} · ${clean(from, 80)} -> ${clean(to, 80)}: ${clean(text, 160)}`;
 }
 export class OpenCodeSessions implements Sessions {
   constructor(
@@ -38,12 +40,7 @@ export class OpenCodeSessions implements Sessions {
     }
   }
   async admit(request: Request, delivery: Delivery): Promise<void> {
-    const label = summary(
-      delivery.from,
-      delivery.to,
-      delivery.text,
-      delivery.kind === 'answer' ? 'received' : 'question',
-    );
+    const label = summary(delivery.from, delivery.to, delivery.text, delivery.kind);
     await this.ctx.session.synthetic({
       sessionID: delivery.to,
       id: delivery.id,

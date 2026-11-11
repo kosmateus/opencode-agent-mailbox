@@ -5,7 +5,7 @@ const Notice = z.object({ label: z.string(), kind: z.enum(['question', 'answer']
 export default Plugin.define({
   id: 'agent-mailbox',
   setup(ctx) {
-    if (ctx.options.toasts === false) return;
+    if (ctx.options.toasts !== true) return;
     const [state, setState] = ctx.storage.memory<{ seen: string[] }>('notices', { initial: { seen: [] } });
     let lastToast = 0;
     return ctx.data.on('session.inbox.enqueued', (event) => {
@@ -20,10 +20,15 @@ export default Plugin.define({
       });
       if (Date.now() - lastToast < 1500) return;
       lastToast = Date.now();
+      const message = notice.data.label
+        .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .slice(0, 400)
+        .trim();
       ctx.ui.toast.show({
         title: 'Agent mailbox',
-        message: notice.data.label.replace(/\(received\)$/, '(queued)'),
-        variant: notice.data.kind === 'answer' ? 'success' : 'info',
+        message,
+        variant: 'info',
         sessionID: notice.data.to,
         duration: 3500,
       });
