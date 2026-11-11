@@ -6,6 +6,10 @@ import { Request, MailboxError, participants } from '../domain/model.js';
 import type { Repository } from '../ports/index.js';
 export class SqliteRepository implements Repository {
   private tail: Promise<unknown> = Promise.resolve();
+  private inFlight = 0;
+  private closing = false;
+  private closePromise: Promise<void> | undefined;
+  private drained: (() => void) | undefined;
   private constructor(
     private readonly db: Client,
     private readonly maxPending: number,
@@ -34,9 +38,12 @@ export class SqliteRepository implements Repository {
   private decode(body: unknown): Request {
     return Request.parse(JSON.parse(String(body)));
   }
-  async get(id: string): Promise<Request | undefined> {
-    const row = (await this.db.execute({ sql: 'SELECT body FROM requests WHERE id=?', args: [id] })).rows[0];
-    return row ? this.decode(row.body) : undefined;
+  get(id: string): Promise<Request | undefined> {
+    return this.withConnection(async () => {
+      const row = (await this.db.execute({ sql: 'SELECT body FROM requests WHERE id=?', args: [id] }))
+        .rows[0];
+      return row ? this.decode(row.body) : undefined;
+    });
   }
   update<T>(
     id: string,
@@ -77,52 +84,74 @@ export class SqliteRepository implements Repository {
         tx.close();
       }
     };
-    return this.serialize(execute);
+    return this.withConnection(() => this.serialize(execute));
   }
-  async active(): Promise<Request[]> {
-    return (await this.db.execute('SELECT body FROM requests WHERE active=1')).rows.map((r) =>
-      this.decode(r.body),
+  active(): Promise<Request[]> {
+    return this.withConnection(async () =>
+      (await this.db.execute('SELECT body FROM requests WHERE active=1')).rows.map((r) =>
+        this.decode(r.body),
+      ),
     );
   }
-  async sessionIDs(): Promise<string[]> {
-    const ids = new Set<string>();
-    for (const row of (await this.db.execute('SELECT body FROM requests')).rows)
-      for (const id of participants(this.decode(row.body))) ids.add(id);
-    return [...ids];
+  sessionIDs(): Promise<string[]> {
+    return this.withConnection(async () => {
+      const ids = new Set<string>();
+      for (const row of (await this.db.execute('SELECT body FROM requests')).rows)
+        for (const id of participants(this.decode(row.body))) ids.add(id);
+      return [...ids];
+    });
   }
   purgeSession(sessionID: string, knownParticipant = false): Promise<void> {
-    return this.serialize(async () => {
-      const tx = await this.db.transaction('write');
-      try {
-        const removed = await tx.execute({
-          sql: `DELETE FROM requests WHERE json_extract(body, '$.origin') = ?
+    return this.withConnection(() =>
+      this.serialize(async () => {
+        const tx = await this.db.transaction('write');
+        try {
+          const removed = await tx.execute({
+            sql: `DELETE FROM requests WHERE json_extract(body, '$.origin') = ?
             OR json_extract(body, '$.holder') = ?
             OR EXISTS (SELECT 1 FROM json_each(body, '$.route') WHERE value = ?)
             OR EXISTS (SELECT 1 FROM json_each(body, '$.outbox')
               WHERE json_extract(value, '$.from') = ? OR json_extract(value, '$.to') = ?)`,
-          args: [sessionID, sessionID, sessionID, sessionID, sessionID],
-        });
-        if (removed.rowsAffected || knownParticipant)
-          await tx.execute({
-            sql: 'INSERT OR IGNORE INTO deleted_sessions(id) VALUES(?)',
-            args: [sessionID],
+            args: [sessionID, sessionID, sessionID, sessionID, sessionID],
           });
-        await tx.commit();
-      } catch (error) {
-        await tx.rollback();
-        throw error;
-      } finally {
-        tx.close();
-      }
-    });
+          if (removed.rowsAffected || knownParticipant)
+            await tx.execute({
+              sql: 'INSERT OR IGNORE INTO deleted_sessions(id) VALUES(?)',
+              args: [sessionID],
+            });
+          await tx.commit();
+        } catch (error) {
+          await tx.rollback();
+          throw error;
+        } finally {
+          tx.close();
+        }
+      }),
+    );
   }
   private serialize<T>(execute: () => Promise<T>): Promise<T> {
     const job = this.tail.then(() => retryBusy(execute));
     this.tail = job.catch(() => undefined);
     return job;
   }
-  close(): void {
-    this.db.close();
+  private withConnection<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.closing) return Promise.reject(new MailboxError('STORAGE', 'Mailbox storage is closing.'));
+    this.inFlight++;
+    return Promise.resolve()
+      .then(operation)
+      .finally(() => {
+        this.inFlight--;
+        if (this.closing && this.inFlight === 0) this.drained?.();
+      });
+  }
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
+    this.closing = true;
+    this.closePromise = (async () => {
+      if (this.inFlight) await new Promise<void>((resolve) => (this.drained = resolve));
+      this.db.close();
+    })();
+    return this.closePromise;
   }
 }
 

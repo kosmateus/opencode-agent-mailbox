@@ -49,7 +49,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await worker.stop();
-  repo.close();
+  await repo.close();
   await rm(dir, { recursive: true, force: true });
 });
 describe('durable application and SQLite integration', () => {
@@ -238,7 +238,7 @@ describe('durable application and SQLite integration', () => {
   it('recovers pending messages from disk after restart', async () => {
     const r = await mailbox.ask('A', 'B', 'Q');
     await worker.stop();
-    repo.close();
+    await repo.close();
     repo = await SqliteRepository.open(join(dir, 'state.db'));
     worker = new Dispatcher(repo, host, { now: () => now });
     await worker.tick();
@@ -391,7 +391,7 @@ describe('durable application and SQLite integration', () => {
       expect(results.filter((x) => x.status === 'fulfilled')).toHaveLength(1);
       expect((await repo.get(r.requestID))?.state).toBe('answered');
     } finally {
-      other.close();
+      await other.close();
     }
   });
 });

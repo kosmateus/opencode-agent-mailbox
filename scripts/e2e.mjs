@@ -323,6 +323,13 @@ try {
     'The same session must work when the RPC is routed to its own location',
   );
   await client.session.remove({ sessionID: foreignSession.id });
+  await assert.rejects(
+    client
+      .rpc(MailboxControl)
+      .pendingQuestions({ sessionID: foreignSession.id }, { location: foreignSession.location }),
+    (error) => error.type === 'session_unavailable' && error.data.code === 'SESSION_UNAVAILABLE',
+    'A deleted session must return a declared error instead of a handler defect',
+  );
   const modeSibling = await client.session.create({
     parentID: modeRoot.id,
     location: { directory: root },
@@ -766,9 +773,11 @@ try {
     },
   });
   const orphan = await orphanMailbox.ask(session.id, orphanSessionID, 'REMOVE_MISSED_DELETION_ON_STARTUP');
-  recoveryRepo.close();
+  await recoveryRepo.close();
   client = await startHost();
-  await client.plugin.list({ location: { directory: root } });
+  await client
+    .rpc(MailboxControl)
+    .pendingQuestions({ sessionID: idle.id }, { location: { directory: root } });
   const reconciledDatabase = createClient({ url: pathToFileURL(databasePath).href });
   try {
     await waitUntil(
