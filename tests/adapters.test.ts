@@ -130,6 +130,17 @@ describe('official OpenCode adapter contracts', () => {
       expect.objectContaining({ sessionID: 'ses_A', action: 'ask_subagent' }),
     );
   });
+
+  it.each(['SessionNotFoundError', 'Session.NotFoundError'])(
+    'maps the OpenCode %s session.get failure to SESSION_UNAVAILABLE',
+    async (_tag) => {
+      const adapter = new OpenCodeSessions(
+        { session: { get: vi.fn().mockRejectedValue({ _tag, message: 'Session not found' }) } as never },
+        'p',
+      );
+      await expect(adapter.get('ses_missing')).rejects.toMatchObject({ code: 'SESSION_UNAVAILABLE' });
+    },
+  );
   it('TUI deduplicates, coalesces and disposes native notifications', async () => {
     let callback: ((event: OpenCodeEvent) => void) | undefined;
     const show = vi.fn(),

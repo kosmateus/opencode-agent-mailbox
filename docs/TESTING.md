@@ -10,6 +10,8 @@ This is an integration E2E of the real host's model/tool/session loop. It does n
 
 Ignored `.e2e/` directories retain local diagnostics. The test never touches the user's normal OpenCode configuration or credentials. CI executes both suites before any publication.
 
+Deletion tests cover senders, recipients, intermediate hops, settled notifications, unrelated conversations, cross-connection stale writes, restart-persistent content-free guards, in-flight admission acknowledgements and subscription cleanup. Startup reconciliation preserves archived sessions and does not purge on transient lookup errors. The real host test removes both a recipient subtree and a sender, checks that their mailbox records vanish, and verifies unrelated records remain.
+
 Local release checks:
 
 ```sh

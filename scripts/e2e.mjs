@@ -456,6 +456,62 @@ try {
   assert.equal((await client.session.get({ sessionID: notificationRecipient.id })).time.busy, undefined);
   const notificationRequestID = notificationResult.requestID;
 
+  const deletionParent = await client.session.create({
+    parentID: modeRoot.id,
+    location: { directory: root },
+    title: 'Deletion subtree parent',
+  });
+  const deletionRecipient = await client.session.create({
+    parentID: deletionParent.id,
+    location: { directory: root },
+    title: 'Deletion subtree recipient',
+  });
+  const { result: deletionResult } = await runModeRequest(
+    'MODE_DELETE_RECIPIENT',
+    deletionRecipient.id,
+    'DELETE_THIS_MAILBOX_RECORD',
+    { requiresReply: false },
+  );
+  assert.equal(deletionResult.ok, true);
+  await waitForInbox(deletionRecipient.id);
+  const cleanupDatabase = createClient({
+    url: pathToFileURL(
+      join(temp, 'mailbox', createHash('sha256').update(modeRoot.projectID).digest('hex'), 'mailbox.db'),
+    ).href,
+  });
+  const hasRequest = async (requestID) =>
+    Number(
+      (
+        await cleanupDatabase.execute({
+          sql: 'SELECT COUNT(*) AS n FROM requests WHERE id=?',
+          args: [requestID],
+        })
+      ).rows[0].n,
+    ) > 0;
+  try {
+    await client.session.remove({ sessionID: deletionParent.id });
+    await waitUntil(
+      'Deleting a subtree must purge its recipient mailbox records',
+      async () => !(await hasRequest(deletionResult.requestID)),
+    );
+    assert.equal(await hasRequest(accepted4000.requestID), true, 'Unrelated mailbox records must remain');
+    const { result: senderDeletedResult, senderID: deletedSenderID } = await runModeRequest(
+      'MODE_DELETE_SENDER',
+      modeSibling.id,
+      'DELETE_SENDER_RECORD',
+      { requiresReply: false },
+    );
+    assert.equal(senderDeletedResult.ok, true);
+    await client.session.remove({ sessionID: deletedSenderID });
+    await waitUntil(
+      'Deleting a sender must purge its mailbox records',
+      async () => !(await hasRequest(senderDeletedResult.requestID)),
+    );
+    assert.equal(await hasRequest(accepted4000.requestID), true);
+  } finally {
+    cleanupDatabase.close();
+  }
+
   const wakeOrigin = await client.session.create({
     location: { directory: root },
     title: 'Idle answer origin',
@@ -696,9 +752,40 @@ try {
     },
   });
   const recovered = await recoveryMailbox.ask(session.id, idle.id, 'RECOVER_AFTER_RESTART');
+  const orphanSessionID = `ses_${randomUUID().replaceAll('-', '')}`;
+  const orphanMailbox = new Mailbox(recoveryRepo, {
+    get: async (id) => ({
+      id,
+      projectID: session.projectID,
+      title: 'Offline deletion fixture',
+      archived: false,
+      ...(id === session.id ? {} : { parentID: session.id }),
+    }),
+    admit: async () => {
+      throw new Error('Server is stopped');
+    },
+  });
+  const orphan = await orphanMailbox.ask(session.id, orphanSessionID, 'REMOVE_MISSED_DELETION_ON_STARTUP');
   recoveryRepo.close();
   client = await startHost();
   await client.plugin.list({ location: { directory: root } });
+  const reconciledDatabase = createClient({ url: pathToFileURL(databasePath).href });
+  try {
+    await waitUntil(
+      'Startup must purge a missed-deletion record before dispatching outboxes',
+      async () =>
+        Number(
+          (
+            await reconciledDatabase.execute({
+              sql: 'SELECT COUNT(*) AS n FROM requests WHERE id=?',
+              args: [orphan.requestID],
+            })
+          ).rows[0].n,
+        ) === 0,
+    );
+  } finally {
+    reconciledDatabase.close();
+  }
   let inbox = [];
   const recoveryDeadline = Date.now() + 10000;
   while (Date.now() < recoveryDeadline) {
@@ -739,6 +826,8 @@ try {
     hostDeduplication: true,
     userControlledBidirectional: true,
     rpcSessionLocationIsolation: true,
+    sessionDeletionPurgesMailboxData: true,
+    startupReconcilesMissingSessions: true,
     sessionToggleWithoutArguments: true,
     complete4000CharacterQuestionsAndAnswers: true,
     rejected4001CharacterQuestionsAndAnswers: true,

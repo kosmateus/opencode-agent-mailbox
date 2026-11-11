@@ -35,13 +35,14 @@ export class Dispatcher {
   }
   private async deliver(id: string): Promise<void> {
     const request = await this.repo.update(id, (r) => {
-      if (!r) throw new MailboxError('NOT_FOUND', 'Request disappeared.');
+      if (!r) return { request: undefined, result: undefined };
       if (r.state === 'pending' && r.expiresAt <= this.clock.now()) {
         r.state = 'expired';
         for (const d of r.outbox) if (d.state === 'pending') d.state = 'cancelled';
       }
       return { request: r, result: r };
     });
+    if (!request) return;
     for (const delivery of request.outbox) {
       if (delivery.state !== 'pending' || delivery.nextAt > this.clock.now()) continue;
       // Re-read before dispatch to reduce cancellation races. Host admission remains the boundary.
@@ -52,7 +53,7 @@ export class Dispatcher {
         if (recipient.archived) throw new MailboxError('SESSION_UNAVAILABLE', 'Recipient is archived.');
         await this.sessions.admit(request, delivery);
         await this.repo.update(id, (r) => {
-          if (!r) throw new MailboxError('NOT_FOUND', 'Request disappeared.');
+          if (!r) return { request: undefined, result: undefined };
           const d = r.outbox.find((x) => x.id === delivery.id);
           if (d) {
             d.state = 'admitted';
@@ -63,7 +64,7 @@ export class Dispatcher {
         });
       } catch (error) {
         await this.repo.update(id, (r) => {
-          if (!r) throw new MailboxError('NOT_FOUND', 'Request disappeared.');
+          if (!r) return { request: undefined, result: undefined };
           const d = r.outbox.find((x) => x.id === delivery.id);
           if (d?.state === 'pending') {
             d.attempts++;

@@ -21,6 +21,7 @@ export function summary(from: string, to: string, text: string, state: string): 
   return `${header(from, to, state)}: ${clean(text)}`;
 }
 export class OpenCodeSessions implements Sessions {
+  private readonly seen = new Set<string>();
   constructor(
     private readonly ctx: Pick<Plugin.Context, 'session'>,
     private readonly projectID: string,
@@ -31,6 +32,7 @@ export class OpenCodeSessions implements Sessions {
       const s = await this.ctx.session.get({ sessionID: id });
       if (s.projectID !== this.projectID)
         throw new MailboxError('FORBIDDEN', 'Session is outside this project.');
+      this.seen.add(id);
       return {
         id: s.id,
         ...(s.parentID ? { parentID: s.parentID } : {}),
@@ -40,14 +42,13 @@ export class OpenCodeSessions implements Sessions {
       };
     } catch (e) {
       if (e instanceof MailboxError) throw e;
-      if (
-        e &&
-        typeof e === 'object' &&
-        (('_tag' in e && e._tag === 'SessionNotFoundError') || ('status' in e && e.status === 404))
-      )
+      if (isMissingSession(e))
         throw new MailboxError('SESSION_UNAVAILABLE', 'Session was deleted or does not exist.');
       throw e;
     }
+  }
+  hasSeen(id: string): boolean {
+    return this.seen.has(id);
   }
   async admit(request: Request, delivery: Delivery): Promise<void> {
     const kind = delivery.kind;
@@ -86,4 +87,12 @@ export class OpenCodeSessions implements Sessions {
       },
     });
   }
+}
+
+function isMissingSession(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const value = error as { _tag?: unknown; status?: unknown };
+  return (
+    value.status === 404 || value._tag === 'SessionNotFoundError' || value._tag === 'Session.NotFoundError'
+  );
 }

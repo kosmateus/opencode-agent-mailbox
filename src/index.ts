@@ -4,9 +4,11 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { Mailbox } from './application/mailbox.js';
 import { Dispatcher } from './application/dispatcher.js';
+import { SessionCleanup } from './application/cleanup.js';
 import { SqliteRepository } from './adapters/sqlite.js';
 import { OpenCodeSessions } from './adapters/opencode.js';
 import { SessionModeStore } from './adapters/session-mode.js';
+import { watchSessionDeletion } from './adapters/lifecycle.js';
 import { registerTools, agentInstructions } from './adapters/tools.js';
 import { Options } from './config.js';
 import { MailboxError } from './domain/model.js';
@@ -39,7 +41,10 @@ export default Plugin.define({
       treeSettings,
     });
     const dispatcher = new Dispatcher(repo, sessions);
+    const cleanup = new SessionCleanup(repo, sessions, (sessionID) => treeSettings.remove(sessionID));
+    const stopCleanup = watchSessionDeletion(ctx, cleanup);
     try {
+      await cleanup.reconcile();
       const tools = await registerTools(ctx, mailbox, options.maxMessageLength);
       const rpc = await ctx.rpc.register(MailboxControl, {
         setBidirectional: async (input) => {
@@ -82,6 +87,7 @@ export default Plugin.define({
       tick();
       return async () => {
         clearInterval(timer);
+        await stopCleanup();
         await tools.dispose();
         await rpc.dispose();
         await hook.dispose();
@@ -89,6 +95,7 @@ export default Plugin.define({
         repo.close();
       };
     } catch (error) {
+      await stopCleanup();
       await dispatcher.stop();
       repo.close();
       throw error;
