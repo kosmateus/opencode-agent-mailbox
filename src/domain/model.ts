@@ -31,6 +31,16 @@ export const Request = z.object({
   outbox: z.array(Delivery),
 });
 export type Request = z.infer<typeof Request>;
+export function participants(request: Request): string[] {
+  return [
+    ...new Set([
+      request.origin,
+      request.holder,
+      ...request.route,
+      ...request.outbox.flatMap((delivery) => [delivery.from, delivery.to]),
+    ]),
+  ];
+}
 export type ErrorCode =
   | 'INVALID_INPUT'
   | 'NOT_FOUND'

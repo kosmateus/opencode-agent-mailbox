@@ -116,6 +116,12 @@ Questions and informational notifications use `delivery: "steer", resume: false`
 
 SQLite stores the request and outbox atomically. After a restart, pending entries retry automatically. Stable host inbox IDs prevent duplicate transcript insertions, including a crash after host acceptance but before local acknowledgement. The guarantee covers one effective answer admission, not exactly-once model reasoning or arbitrary tool side effects. Cancellation and expiry reject later replies; already admitted or concurrently admitting messages cannot be recalled through the public plugin API.
 
+### Session deletion
+
+Deleting a session also asynchronously removes mailbox requests and outboxes involving it, including settled notifications and questions forwarded through that session. Unrelated conversations remain. Session-tree setting overrides for the deleted root are removed as well; archiving is not deletion.
+
+On startup the plugin reconciles missed deletion events before dispatching an outbox. Content-free deleted-session ID guards prevent stale writers or retries from recreating the erased messages. This removes the plugin's records, not copies already admitted to other surviving OpenCode transcripts; those belong to the host's history. In-flight admission can race deletion and cannot be recalled. SQLite WAL files, backups and external logs are not a secure-erasure guarantee.
+
 ## Troubleshooting
 
 - **No answer**: the recipient may be idle, blocked by permission approval, finished, or not yet at a safe step. Inspect `request_status` and `subagent_status`. Informational notifications do not expect answers. Do not repeatedly ask the same question.

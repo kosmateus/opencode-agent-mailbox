@@ -5,11 +5,13 @@
 - `domain/model.ts`: versioned request schema, immutable origin, current holder, lifecycle and routing invariants. No host or database API.
 - `application/mailbox.ts`: use cases; injected repository, session directory, clock and per-tree mode store. Default authorization is strict descendant-only; opted-in routing checks both sessions' root and project with iterative cycle detection.
 - `application/dispatcher.ts`: durable outbox reconciliation, retry/backoff and expiry. No model execution.
+- `application/cleanup.ts`: purge requests involving a deleted participant and reconcile missed deletions before dispatch starts.
 - `application/status.ts`: read-only, iterative and paginated descendant inspection.
 - `ports/index.ts`: atomic repository and host session admission contracts.
 - `adapters/sqlite.ts`: local SQLite, WAL, atomic request+outbox updates, per-connection serialization and contention retries between connections. Zero SQLite busy timeout prevents a synchronous busy wait from blocking the event loop while another local connection needs it to commit.
 - `adapters/opencode.ts`: official SDK synthetic admission with fixed IDs, complete message descriptions, steer and answer-only wake policy.
 - `adapters/session-mode.ts`: durable user-set bidirectional and wake overrides, keyed by project and session-tree root.
+- `adapters/lifecycle.ts`: public `session.deleted` subscription with cancellation on plugin unload. Events are global, but purges operate only on matching IDs in the current project database.
 - `adapters/tools.ts`: host permission assertions, validation, agent-facing tool contracts and error mapping.
 - `index.ts`: composition root, lifecycle and agent instructions; `rpc.ts` exposes user controls and a body-free pending-question count; `tui.ts` registers session commands, an awaiting-reply status (`tui-pending.ts`) and optional native notifications.
 
@@ -35,7 +37,11 @@ Requests default to `requiresReply: true`, including legacy records read without
 
 Requests transition pending -> answered/notified/cancelled/expired/failed. Answer admission has its own state because saving an answer and delivering it are separate operations. Forwarding changes the holder without ending pending state. Sender-only cancellation and holder-only reply are rechecked inside the write transaction.
 
-Records are intentionally not automatically deleted: retained IDs act as idempotency tombstones and permit inspection after restart. Their text contains project communication. Back up or remove the project mailbox directory only with all relevant OpenCode servers stopped; removing it also removes correlation/deduplication history. OpenCode's own transcript retention is independent. Large deployments should monitor database size and define a retention policy before deleting old records.
+Records remain inspectable while their participant sessions exist. A public `session.deleted` event atomically deletes requests/outboxes referencing that session as origin, holder, route hop or delivery endpoint. Startup reconciliation also checks settled records, so deletion while the plugin was inactive is recovered before dispatch. Archived sessions remain intact. Deleted root settings are removed without editing global plugin configuration.
+
+The same SQLite transaction records a content-free deleted-session ID guard, and every subsequent write checks participant IDs against these guards. This closes the deletion/write race across plugin instances. Unknown foreign-session events do not create guards in this project's database. Dispatcher acknowledgements become no-ops if their request was concurrently purged. The guard contains no question or answer and survives restarts.
+
+OpenCode removes the deleted session's own history. Copies already admitted to other surviving sessions cannot be recalled through the plugin SDK; in-flight host admission may race deletion. Logical SQLite deletion is not forensic erasure of WAL files, backups or external logs. Back up or remove the project mailbox directory only with all relevant OpenCode servers stopped; removing it also removes correlation/deduplication guards.
 
 ## Known boundaries
 
