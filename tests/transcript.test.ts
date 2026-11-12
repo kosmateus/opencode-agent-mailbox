@@ -34,7 +34,18 @@ describe('mailbox transcript', () => {
   it('keeps the request ID and original message in the synthetic payload', async () => {
     const synthetic = vi.fn<Plugin.Context['session']['synthetic']>();
     const adapter = new OpenCodeSessions(
-      { session: { synthetic } as unknown as Plugin.Context['session'] },
+      {
+        session: {
+          synthetic,
+          get: vi.fn().mockResolvedValue({
+            id: 'ses_B',
+            parentID: 'ses_A',
+            projectID: 'project',
+            title: 'B',
+            time: {},
+          }),
+        } as unknown as Plugin.Context['session'],
+      },
       'project',
     );
     const request = { id: `req_${'a'.repeat(64)}`, origin: 'ses_A', expiresAt: 10 } as Request;
@@ -53,7 +64,7 @@ describe('mailbox transcript', () => {
 
     const input = synthetic.mock.calls[0]?.[0];
     expect(input?.description).toBe('Mailbox · Question queued · ses_A -> ses_B: preserve controls [2J');
-    expect(input?.resume).toBe(false);
+    expect(input?.resume).toBe(true);
     expect(JSON.parse(input!.text)).toMatchObject({ requestID: request.id, message });
   });
 

@@ -31,7 +31,7 @@ Same-project plugin instances share one project database, including worktrees. P
 
 Bidirectional mode defaults off. The global plugin option provides the default; the user-only `/mailbox-bidirectional on|off` command stores an explicit override for the selected session's root tree. Reply wake-up defaults on and has its own `/mailbox-wake-on-reply on|off` override. Both are scoped by project and root in OpenCode plugin storage, so one tree cannot change another and commands never edit plugin configuration. A per-request wake override takes precedence over the tree override and global setting. No model-facing mailbox tool changes tree settings. `maxMessageLength` counts Unicode code points (default 4000) and rejects rather than truncates; the existing 16000 UTF-16 code-unit schema cap remains a hard limit.
 
-Requests default to `requiresReply: true`, including legacy records read without that field. A no-reply informational message uses a `notification` delivery; after successful admission it is terminally `notified`, so it does not remain active waiting for an answer. Questions and notifications use `resume:false`; answers use request or effective tree/global wake policy for the original sender. If wake-up is disabled, the answer is still durably queued.
+Requests default to `requiresReply: true`, including legacy records read without that field. A no-reply informational message uses a `notification` delivery; after successful admission it is terminally `notified`, so it does not remain active waiting for an answer. Questions and notifications to a direct child or authorized peer subagent (such as a sibling or cousin) use `resume:true`; non-direct descendants and upward parent/ancestor routes do not force wake. Answers use request or effective tree/global wake policy for the original sender. If answer wake-up is disabled, the answer is still durably queued.
 
 ## Lifecycle and retention
 
@@ -45,7 +45,7 @@ OpenCode removes the deleted session's own history. Copies already admitted to o
 
 ## Known boundaries
 
-- Questions and notifications are delivered at the next safe step and never wake an idle recipient. Answers may wake an idle original sender by default; disabling wake preserves the durable inbox entry for the next run.
+- Questions and notifications wake a direct child or authorized peer subagent; non-direct descendants and upward parent/ancestor routes remain queued without an automatic wake. Answers may wake an idle original sender according to request, tree, then global policy; disabling answer wake preserves the durable inbox entry for the next run.
 - The model decides whether/when to answer. The plugin guarantees routing and correlation, not model compliance.
 - The native host controls background completion notices; those are not unsolicited plugin reports.
 - An admitted or concurrently admitting message cannot be recalled through the SDK available to plugins. Cancellation rejects future domain operations; it does not erase history.

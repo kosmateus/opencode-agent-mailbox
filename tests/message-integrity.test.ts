@@ -36,10 +36,20 @@ function makeDelivery(kind: DeliveryKind, text: string): Delivery {
   } as unknown as Delivery;
 }
 
-function createSessions(wakeOnReply?: (sessionID: string) => boolean | Promise<boolean>) {
+function createSessions(
+  wakeOnReply?: (sessionID: string) => boolean | Promise<boolean>,
+  parents: Record<string, string | undefined> = { ses_recipient: 'ses_origin' },
+) {
   const synthetic = vi.fn<Plugin.Context['session']['synthetic']>();
+  const get = vi.fn(async ({ sessionID }: { sessionID: string }) => ({
+    id: sessionID,
+    parentID: parents[sessionID],
+    projectID: 'project',
+    title: sessionID,
+    time: {},
+  }));
   const sessions = new OpenCodeSessions(
-    { session: { synthetic } as unknown as Plugin.Context['session'] },
+    { session: { synthetic, get } as unknown as Plugin.Context['session'] },
     'project',
     wakeOnReply,
   );
@@ -66,7 +76,7 @@ describe('mailbox message integrity', () => {
         `Mailbox · ${kind === 'question' ? 'Question queued' : 'Reply queued'} · ${delivery.from} -> ${delivery.to}: ${message}`,
       );
       expect(input.description).toContain(marker);
-      expect(input.resume).toBe(kind === 'answer');
+      expect(input.resume).toBe(true);
     },
   );
 
@@ -93,18 +103,81 @@ describe('mailbox message integrity', () => {
   );
 
   it.each([
-    ['question', true],
-    ['notification', false],
-  ] as const)('%s delivery is durable but never wakes the target', async (kind, requiresReply) => {
-    const wakeOnReply = vi.fn(async () => true);
-    const { sessions, synthetic } = createSessions(wakeOnReply);
-    const request = makeRequest({ requiresReply, wakeOnReply: true });
+    [
+      'direct question wakes despite disabled sender wake',
+      'question',
+      { ses_recipient: 'ses_origin' },
+      false,
+      false,
+      true,
+    ],
+    [
+      'direct notification ignores disabled sender wake',
+      'notification',
+      { ses_recipient: 'ses_origin' },
+      false,
+      undefined,
+      true,
+    ],
+    [
+      'sibling subagent question wakes despite disabled sender wake',
+      'question',
+      { ses_origin: 'ses_parent', ses_recipient: 'ses_parent' },
+      false,
+      false,
+      true,
+    ],
+    [
+      'sibling subagent notification wakes despite enabled sender wake',
+      'notification',
+      { ses_origin: 'ses_parent', ses_recipient: 'ses_parent' },
+      true,
+      undefined,
+      true,
+    ],
+    [
+      'cousin subagent question wakes when routed between peers',
+      'question',
+      {
+        ses_origin: 'ses_sender_parent',
+        ses_sender_parent: 'ses_root',
+        ses_recipient: 'ses_recipient_parent',
+        ses_recipient_parent: 'ses_root',
+      },
+      false,
+      false,
+      true,
+    ],
+    [
+      'non-direct descendant remains queued',
+      'question',
+      { ses_recipient: 'ses_child', ses_child: 'ses_origin' },
+      true,
+      undefined,
+      false,
+    ],
+    [
+      'question to a parent does not force an upward wake',
+      'question',
+      { ses_origin: 'ses_recipient', ses_recipient: 'ses_root' },
+      true,
+      true,
+      false,
+    ],
+    ['question to a root remains queued', 'question', { ses_origin: 'ses_parent' }, true, true, false],
+  ] as const)('%s', async (_case, kind, parents, defaultWake, requestWake, expectedResume) => {
+    const wakeOnReply = vi.fn(async () => defaultWake);
+    const { sessions, synthetic } = createSessions(wakeOnReply, parents);
+    const request = makeRequest({
+      requiresReply: kind !== 'notification',
+      ...(requestWake === undefined ? {} : { wakeOnReply: requestWake }),
+    });
 
     await sessions.admit(request, makeDelivery(kind, 'Information'));
 
     const input = synthetic.mock.calls[0]![0];
     const payload = JSON.parse(input.text) as { instruction: string; requestID: string; message: string };
-    expect(input.resume).toBe(false);
+    expect(input.resume).toBe(expectedResume);
     expect(input.id).toBe(`msg_${kind}`);
     expect(payload).toMatchObject({ requestID: request.id, message: 'Information' });
     expect(wakeOnReply).not.toHaveBeenCalled();
