@@ -4,8 +4,9 @@ import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Request, MailboxError, participants } from '../domain/model.js';
 import type { Repository } from '../ports/index.js';
+// Multiple plugin instances in one process can open the same project database.
+const writeQueues = new Map<string | symbol, Promise<void>>();
 export class SqliteRepository implements Repository {
-  private tail: Promise<unknown> = Promise.resolve();
   private inFlight = 0;
   private closing = false;
   private closePromise: Promise<void> | undefined;
@@ -13,10 +14,12 @@ export class SqliteRepository implements Repository {
   private constructor(
     private readonly db: Client,
     private readonly maxPending: number,
+    private readonly queueKey: string | symbol = Symbol(),
   ) {}
   static async open(path: string, maxPending = 1000): Promise<SqliteRepository> {
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-    const db = createClient({ url: pathToFileURL(path).href });
+    const url = pathToFileURL(path).href;
+    const db = createClient({ url });
     try {
       await db.execute('PRAGMA busy_timeout=0');
       await db.execute('PRAGMA synchronous=FULL');
@@ -29,7 +32,7 @@ export class SqliteRepository implements Repository {
       await retryBusy(() => db.execute('CREATE INDEX IF NOT EXISTS requests_active ON requests(active)'));
       await retryBusy(() => db.execute('CREATE TABLE IF NOT EXISTS deleted_sessions (id TEXT PRIMARY KEY)'));
       await chmod(path, 0o600);
-      return new SqliteRepository(db, maxPending);
+      return new SqliteRepository(db, maxPending, url);
     } catch (error) {
       db.close();
       throw error;
@@ -130,8 +133,16 @@ export class SqliteRepository implements Repository {
     );
   }
   private serialize<T>(execute: () => Promise<T>): Promise<T> {
-    const job = this.tail.then(() => retryBusy(execute));
-    this.tail = job.catch(() => undefined);
+    const previous = writeQueues.get(this.queueKey) ?? Promise.resolve();
+    const job = previous.then(() => retryBusy(execute));
+    const tail = job.then(
+      () => undefined,
+      () => undefined,
+    );
+    writeQueues.set(this.queueKey, tail);
+    void tail.then(() => {
+      if (writeQueues.get(this.queueKey) === tail) writeQueues.delete(this.queueKey);
+    });
     return job;
   }
   private withConnection<T>(operation: () => Promise<T>): Promise<T> {

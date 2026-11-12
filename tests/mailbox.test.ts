@@ -60,6 +60,30 @@ describe('durable application and SQLite integration', () => {
     expect(host.admissions).toBe(0);
     expect((await repo.get(r.requestID))?.outbox).toHaveLength(1);
   });
+  it('accepts sibling notifications from concurrent repository instances', async () => {
+    const otherRepo1 = await SqliteRepository.open(join(dir, 'state.db'));
+    const otherRepo2 = await SqliteRepository.open(join(dir, 'state.db'));
+    try {
+      const senders = [repo, otherRepo1, otherRepo2].map(
+        (connection) => new Mailbox(connection, host, { now: () => now }, 300000, { bidirectional: true }),
+      );
+      const results = await Promise.all(
+        senders.map((sender, i) =>
+          sender.ask('B', 'S', `notice-${i}`, `peer-notification-${i}`, undefined, false),
+        ),
+      );
+
+      expect(results.map((result) => result.state)).toEqual(['pending', 'pending', 'pending']);
+      const stored = await Promise.all(results.map((result) => mailbox.inspect('B', result.requestID)));
+      expect(stored.map((request) => request.outbox[0]?.kind)).toEqual([
+        'notification',
+        'notification',
+        'notification',
+      ]);
+    } finally {
+      await Promise.all([otherRepo1.close(), otherRepo2.close()]);
+    }
+  });
   it('routes A -> B -> C -> D, then directly to A', async () => {
     const { requestID: id } = await mailbox.ask('A', 'B', 'tests?');
     await worker.tick();

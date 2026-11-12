@@ -8,7 +8,7 @@
 - `application/cleanup.ts`: purge requests involving a deleted participant and reconcile missed deletions before dispatch starts.
 - `application/status.ts`: read-only, iterative and paginated descendant inspection.
 - `ports/index.ts`: atomic repository and host session admission contracts.
-- `adapters/sqlite.ts`: local SQLite, WAL, atomic request+outbox updates, per-connection serialization and contention retries between connections. Zero SQLite busy timeout prevents a synchronous busy wait from blocking the event loop while another local connection needs it to commit.
+- `adapters/sqlite.ts`: local SQLite, WAL, atomic request+outbox updates, per-database write serialization within a process and contention retries between processes. Zero SQLite busy timeout prevents a synchronous busy wait from blocking the event loop while another connection needs it to commit.
 - `adapters/opencode.ts`: official SDK synthetic admission with fixed IDs, complete message descriptions, steer and answer-only wake policy.
 - `adapters/session-mode.ts`: durable user-set bidirectional and wake overrides, keyed by project and session-tree root.
 - `adapters/lifecycle.ts`: public `session.deleted` subscription with cancellation on plugin unload. Events are global, but purges operate only on matching IDs in the current project database.
