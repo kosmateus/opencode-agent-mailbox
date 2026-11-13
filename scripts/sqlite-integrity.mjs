@@ -30,12 +30,25 @@ async function repository(root) {
   return (await import(pathToFileURL(join(root, 'dist/adapters/sqlite.js')).href)).SqliteRepository;
 }
 
+async function assertIntegrity(root, database) {
+  const { createClient } = await import(
+    pathToFileURL(join(root, 'node_modules/@libsql/client/lib-esm/node.js')).href
+  );
+  const check = createClient({ url: pathToFileURL(database).href });
+  try {
+    assert.equal((await check.execute('PRAGMA integrity_check')).rows[0].integrity_check, 'ok');
+  } finally {
+    check.close();
+  }
+}
+
 export async function writeLane(root, database, lane, allowBusy = false) {
   const Repository = await repository(root);
   let repo = await Repository.open(database);
   const acknowledged = [];
   let updates = 0;
   let rejected = 0;
+  const busyErrors = [];
   const attempt = async (operation) => {
     try {
       await operation();
@@ -45,6 +58,12 @@ export async function writeLane(root, database, lane, allowBusy = false) {
       // accepted, retry it in the harness, or reopen to hide a poisoned client.
       if (!allowBusy || error.code !== 'SQLITE_BUSY') throw error;
       rejected++;
+      busyErrors.push({
+        code: error.code,
+        extendedCode: error.extendedCode,
+        rawCode: error.rawCode,
+        message: error.message,
+      });
       return false;
     }
   };
@@ -72,7 +91,19 @@ export async function writeLane(root, database, lane, allowBusy = false) {
   } finally {
     await repo.close();
   }
-  return { acknowledged, updates, rejected };
+  return { acknowledged, updates, rejected, busyErrors };
+}
+
+async function openLane(root, database, lane) {
+  const Repository = await repository(root);
+  const repo = await Repository.open(database);
+  const data = request(lane + 1);
+  try {
+    await repo.update(data.id, () => ({ request: data, result: undefined }));
+    return data.id;
+  } finally {
+    await repo.close();
+  }
 }
 
 async function child(runtime, args) {
@@ -160,6 +191,26 @@ export default {id:'sqlite-probe', async setup() {
 }
 
 export async function runCase(roots, database, runtime) {
+  let concurrentOpenWrites = 0;
+  if (runtime) {
+    const initialized = await Promise.all(
+      roots.map((root, lane) =>
+        child(runtime, ['--open-lane', root, `${database}.fresh`, String(lane)]).then(JSON.parse),
+      ),
+    );
+    assert.equal(new Set(initialized).size, roots.length, 'concurrent initial writes must be unique');
+    concurrentOpenWrites = initialized.length;
+    const Reader = await repository(roots[0]);
+    const repo = await Reader.open(`${database}.fresh`);
+    try {
+      const rows = await repo.active();
+      assert.equal(rows.length, roots.length, 'concurrent initialization must retain every insert');
+      for (const id of initialized) assert.ok(await repo.get(id));
+    } finally {
+      await repo.close();
+    }
+    await assertIntegrity(roots[0], `${database}.fresh`);
+  }
   const Repository = await repository(roots[0]);
   const seed = await Repository.open(database);
   await seed.update(request(0).id, () => ({ request: request(0), result: undefined }));
@@ -196,16 +247,20 @@ export async function runCase(roots, database, runtime) {
     assert.equal(updates, 60);
     assert.equal(rejected, 0);
   }
-  const { createClient } = await import(
-    pathToFileURL(join(roots[0], 'node_modules/@libsql/client/lib-esm/node.js')).href
-  );
-  const check = createClient({ url: pathToFileURL(database).href });
-  try {
-    assert.equal((await check.execute('PRAGMA integrity_check')).rows[0].integrity_check, 'ok');
-  } finally {
-    check.close();
-  }
-  return { retained: acknowledged.length + 1, atomicUpdates: updates, rejected, integrity: 'ok' };
+  await assertIntegrity(roots[0], database);
+  if (runtime)
+    assert.equal(
+      rejected,
+      0,
+      `process contention should be retried: ${JSON.stringify(lanes.flatMap((lane) => lane.busyErrors))}`,
+    );
+  return {
+    concurrentOpenWrites,
+    retained: acknowledged.length + 1,
+    atomicUpdates: updates,
+    rejected,
+    integrity: 'ok',
+  };
 }
 
 async function main() {
@@ -249,7 +304,8 @@ async function main() {
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   const [mode, rootsFile, database, lane] = process.argv.slice(2);
-  if (mode === '--lane')
+  if (mode === '--open-lane') console.log(JSON.stringify(await openLane(rootsFile, database, Number(lane))));
+  else if (mode === '--lane')
     console.log(JSON.stringify(await writeLane(rootsFile, database, Number(lane), true)));
   else if (mode === '--copies' || mode === '--processes') {
     const roots = JSON.parse(await readFile(rootsFile, 'utf8'));
