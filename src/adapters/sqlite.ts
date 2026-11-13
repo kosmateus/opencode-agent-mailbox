@@ -30,16 +30,21 @@ export class SqliteRepository implements Repository {
     const url = pathToFileURL(path).href;
     const db = runtime.createClient({ url });
     try {
-      await db.execute('PRAGMA busy_timeout=0');
-      await db.execute('PRAGMA synchronous=FULL');
-      await retryBusy(() => db.execute('PRAGMA journal_mode=WAL'));
+      // Static setup SQL uses exec semantics so a busy statement is finalized before retry.
+      await db.executeMultiple('PRAGMA busy_timeout=0');
+      await retryBusy(() => db.executeMultiple('PRAGMA synchronous=FULL'));
+      await retryBusy(() => db.executeMultiple('PRAGMA journal_mode=WAL'));
       await retryBusy(() =>
-        db.execute(
+        db.executeMultiple(
           'CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, active INTEGER NOT NULL, body TEXT NOT NULL)',
         ),
       );
-      await retryBusy(() => db.execute('CREATE INDEX IF NOT EXISTS requests_active ON requests(active)'));
-      await retryBusy(() => db.execute('CREATE TABLE IF NOT EXISTS deleted_sessions (id TEXT PRIMARY KEY)'));
+      await retryBusy(() =>
+        db.executeMultiple('CREATE INDEX IF NOT EXISTS requests_active ON requests(active)'),
+      );
+      await retryBusy(() =>
+        db.executeMultiple('CREATE TABLE IF NOT EXISTS deleted_sessions (id TEXT PRIMARY KEY)'),
+      );
       await chmod(path, 0o600);
       return new SqliteRepository(db, maxPending, url);
     } catch (error) {
@@ -49,6 +54,19 @@ export class SqliteRepository implements Repository {
   }
   private decode(body: unknown): Request {
     return Request.parse(JSON.parse(String(body)));
+  }
+  private async beginWrite() {
+    const tx = await this.db.transaction('deferred');
+    try {
+      // A failed prepared BEGIN IMMEDIATE can leave its statement active in the
+      // native client's pool. Use exec semantics for lock acquisition so retries
+      // receive a clean connection without reopening the client or database.
+      await tx.executeMultiple('ROLLBACK; BEGIN IMMEDIATE');
+      return tx;
+    } catch (error) {
+      tx.close();
+      throw error;
+    }
   }
   get(id: string): Promise<Request | undefined> {
     return this.withConnection(async () => {
@@ -62,7 +80,7 @@ export class SqliteRepository implements Repository {
     change: (current: Request | undefined) => { request: Request | undefined; result: T },
   ): Promise<T> {
     const execute = async () => {
-      const tx = await this.db.transaction('write');
+      const tx = await this.beginWrite();
       try {
         const row = (await tx.execute({ sql: 'SELECT body FROM requests WHERE id=?', args: [id] })).rows[0];
         const { request, result } = change(row ? this.decode(row.body) : undefined);
@@ -90,7 +108,7 @@ export class SqliteRepository implements Repository {
         await tx.commit();
         return result;
       } catch (error) {
-        await tx.rollback();
+        if (!tx.closed) await tx.rollback();
         throw error;
       } finally {
         tx.close();
@@ -116,7 +134,7 @@ export class SqliteRepository implements Repository {
   purgeSession(sessionID: string, knownParticipant = false): Promise<void> {
     return this.withConnection(() =>
       this.serialize(async () => {
-        const tx = await this.db.transaction('write');
+        const tx = await this.beginWrite();
         try {
           const removed = await tx.execute({
             sql: `DELETE FROM requests WHERE json_extract(body, '$.origin') = ?
@@ -133,7 +151,7 @@ export class SqliteRepository implements Repository {
             });
           await tx.commit();
         } catch (error) {
-          await tx.rollback();
+          if (!tx.closed) await tx.rollback();
           throw error;
         } finally {
           tx.close();
@@ -180,7 +198,11 @@ async function retryBusy<T>(run: () => Promise<T>): Promise<T> {
     try {
       return await run();
     } catch (error) {
-      const busy = error instanceof Error && /SQLITE_BUSY|database is locked/.test(error.message);
+      const failure =
+        error instanceof Error ? (error as Error & { code?: unknown; extendedCode?: unknown }) : undefined;
+      const busy =
+        failure?.code === 'SQLITE_BUSY' ||
+        (typeof failure?.extendedCode === 'string' && failure.extendedCode.startsWith('SQLITE_BUSY_'));
       if (!busy || attempt >= 12) throw error;
       await new Promise((resolve) =>
         setTimeout(resolve, Math.min(250, 10 * 2 ** attempt) + Math.random() * 20),
