@@ -8,7 +8,7 @@
 - `application/cleanup.ts`: purge requests involving a deleted participant and reconcile missed deletions before dispatch starts.
 - `application/status.ts`: read-only, iterative and paginated descendant inspection.
 - `ports/index.ts`: atomic repository and host session admission contracts.
-- `adapters/sqlite.ts`: local SQLite, WAL, atomic request+outbox updates, per-database write serialization within a process and contention retries between processes. Zero SQLite busy timeout prevents a synchronous busy wait from blocking the event loop while another connection needs it to commit.
+- `adapters/sqlite.ts`: local SQLite, WAL, atomic request+outbox updates, per-database write serialization within a process and contention retries between processes. A process-global, versioned runtime shares the native client factory and queues across physical package copies and hot reloads; distinct native SQLite copies do not share their in-process file-lock bookkeeping. Zero SQLite busy timeout prevents a synchronous busy wait from blocking the event loop while another connection needs it to commit.
 - `adapters/opencode.ts`: official SDK synthetic admission with fixed IDs, complete message descriptions, steer and answer-only wake policy.
 - `adapters/session-mode.ts`: durable user-set bidirectional and wake overrides, keyed by project and session-tree root.
 - `adapters/lifecycle.ts`: public `session.deleted` subscription with cancellation on plugin unload. Events are global, but purges operate only on matching IDs in the current project database.
@@ -44,6 +44,10 @@ The same SQLite transaction records a content-free deleted-session ID guard, and
 OpenCode removes the deleted session's own history. Copies already admitted to other surviving sessions cannot be recalled through the plugin SDK; in-flight host admission may race deletion. Logical SQLite deletion is not forensic erasure of WAL files, backups or external logs. Back up or remove the project mailbox directory only with all relevant OpenCode servers stopped; removing it also removes correlation/deduplication guards.
 
 ## Known boundaries
+
+- The shared SQLite runtime coordinates copies containing this fix, not older plugin versions or unrelated native SQLite users. Upgrading a host that already opened mailbox connections with older physical native copies requires a coordinated clean process lifecycle, preserving the database and sidecars first; loading the new package cannot repair existing native handles or establish that existing data is intact. Do not reset or recreate a database to suppress storage errors.
+
+  SQLite documents the underlying [multiple-library/POSIX-lock hazard](https://sqlite.org/howtocorrupt.html#multiple_copies_of_sqlite_linked_into_the_same_application). A clean integrity check alone does not prove that every acknowledged application record was retained.
 
 - Questions and notifications wake a direct child or authorized peer subagent; non-direct descendants and upward parent/ancestor routes remain queued without an automatic wake. Answers may wake an idle original sender according to request, tree, then global policy; disabling answer wake preserves the durable inbox entry for the next run.
 - The model decides whether/when to answer. The plugin guarantees routing and correlation, not model compliance.

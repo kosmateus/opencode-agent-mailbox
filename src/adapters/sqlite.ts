@@ -4,8 +4,17 @@ import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Request, MailboxError, participants } from '../domain/model.js';
 import type { Repository } from '../ports/index.js';
-// Multiple plugin instances in one process can open the same project database.
-const writeQueues = new Map<string | symbol, Promise<void>>();
+// Hot reload/package caches can load physically distinct native SQLite copies.
+// Their in-process lock tables do not coordinate, even for identical binaries.
+// Keep all our connections in one native runtime, not merely one write queue.
+const runtimeKey = Symbol.for('@opentoria/opencode-agent-mailbox/sqlite-runtime/v1');
+type SqliteRuntime = {
+  createClient: typeof createClient;
+  writeQueues: Map<string | symbol, Promise<void>>;
+};
+const processGlobals = globalThis as typeof globalThis & { [runtimeKey]?: SqliteRuntime };
+const runtime = (processGlobals[runtimeKey] ??= { createClient, writeQueues: new Map() });
+const { writeQueues } = runtime;
 export class SqliteRepository implements Repository {
   private inFlight = 0;
   private closing = false;
@@ -19,7 +28,7 @@ export class SqliteRepository implements Repository {
   static async open(path: string, maxPending = 1000): Promise<SqliteRepository> {
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     const url = pathToFileURL(path).href;
-    const db = createClient({ url });
+    const db = runtime.createClient({ url });
     try {
       await db.execute('PRAGMA busy_timeout=0');
       await db.execute('PRAGMA synchronous=FULL');
