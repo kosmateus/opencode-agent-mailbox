@@ -12,6 +12,7 @@
     "check:quality:staged": "lint-staged && npm run check:madge",
     "test": "vitest run",
     "test:e2e": "node scripts/e2e.mjs",
+    "test:sqlite": "npm run build && node scripts/sqlite-integrity.mjs",
     "check": "npm run typecheck && npm run lint && npm run format:check && npm test && npm run build && npm run pack:check",
     "pack:check": "node scripts/check-pack.mjs",
     "release": "semantic-release",

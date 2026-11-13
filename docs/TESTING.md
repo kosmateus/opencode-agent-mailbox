@@ -20,3 +20,7 @@ npm run release:dry
 ```
 
 `release:plan` performs offline Conventional Commits analysis of a Git range, without credentials, writes or publishing. Omit the tag to analyze current history. `release:dry` is semantic-release's full dry-run; it needs a real repository/remote and authentication for its read-only verification, and never publishes. Keep dry-run credentials out of committed files.
+
+## SQLite native-copy integrity
+
+Run `npm run test:sqlite` for packed-artifact tests with three physical copies of the adapter, client and native binding. Set `SQLITE_TEST_BUN=bun` to include standalone Bun. The test also starts an isolated OpenCode host (embedded Bun), without model calls or access to the shared server/database. It verifies unique acknowledged inserts, atomic updates of a shared record, reads, close/reopen and SQLite integrity. Separate processes exercise OS locking; explicit `SQLITE_BUSY` rejections are reported separately and are never counted as acknowledged writes or hidden by harness retries. Same-process copies must accept all writes without rejection.

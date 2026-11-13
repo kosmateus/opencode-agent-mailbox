@@ -20,6 +20,12 @@ jobs:
         with:
           node-version: '24.22.1'
           cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
       - run: npm ci
       - run: npm run check
+      - run: npm run test:sqlite
+        env:
+          SQLITE_TEST_BUN: bun
       - run: npm run test:e2e
