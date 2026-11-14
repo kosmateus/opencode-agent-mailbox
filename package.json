@@ -30,7 +30,7 @@
   },
   "devDependencies": {
     "@opentui/core": "0.8.0",
-    "@opencode/cli": "2.2.5",
+    "@opencode/cli": "2.2.7",
     "@opencode/client": "2.2.5",
     "@semantic-release/commit-analyzer": "13.0.1",
     "@semantic-release/exec": "7.1.0",
